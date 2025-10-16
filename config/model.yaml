@@ -1,0 +1,52 @@
+task: "classification"         # or "regression"
+horizon_bars: 24               # must match labels & timeout below
+
+triple_barrier:
+  enable: true
+  pt_mult: 1.5                 # profit barrier * rolling_vol
+  sl_mult: 1.0                 # stop barrier * rolling_vol
+  t_max: 24                    # max holding bars (== horizon_bars)
+
+calibration:
+  enable: true
+  method: "isotonic"           # "platt" | "isotonic"
+
+trade_policy:
+  long_only: true              # start with safer long-only
+  allow_shorts: false
+
+thresholds:
+  min_trades_valid: 30         # avoid over-sparse thresholding
+  grid: [0.50, 0.55, 0.60, 0.65, 0.70]
+
+reducer: "pca"                 # start simple; switch back to "pls" later
+
+pls:
+  sign_lock: true              # keep component signs stable across folds
+
+hysteresis_gap_grid: [10, 15, 20]
+entry_pct_grid: [90, 92, 95, 97, 99]
+score_ema_span: 6
+min_hold_bars: 6
+cooldown_bars: 3
+
+vol_span: 20
+
+elasticnet:
+  alpha: 0.001
+  l1_ratio: 0.1
+
+logistic:
+  C: 1.0
+  penalty: l2
+  class_weight: balanced
+
+hgb_classifier:
+  learning_rate: 0.05
+  max_depth: 6
+  max_leaf_nodes: 31
+  l2_regularization: 0.5
+
+labeling:
+  mode: direction
+  vol_k_sigma: 0.5

@@ -1,0 +1,4 @@
+commission_bps: 10
+slippage_bps: 5
+short_extra_bps: 2
+slip_model: "fixed"

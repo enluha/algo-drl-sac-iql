@@ -1,0 +1,4 @@
+seed: 42               # MVP
+blas_threads: 6        # MVP (CLI override: --blas-threads)
+n_workers: 1           # MVP (CLI override: --n-workers)
+log_level: INFO        # MVP

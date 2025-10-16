@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.pkl
+*.csv
+*.json
+*.html
+*.log
+temp*
+/evaluation/
+/data/
