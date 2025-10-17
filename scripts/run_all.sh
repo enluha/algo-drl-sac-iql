@@ -1,56 +1,53 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SYMBOL=${SYMBOL:-BTCUSDT}
-START=${START:-2024-06-10}
-END=${END:-2025-10-16}
-BLAS_THREADS=${BLAS_THREADS:-6}
-N_WORKERS=${N_WORKERS:-1}
-CONFIG=${CONFIG:-config/config.yaml}
+# --- knobs / overrides ---
+SYMBOL="${SYMBOL:-BTCUSDT}"
+INTERVAL_SEC="${INTERVAL_SEC:-3600}"
+START="${START:-2024-06-10}"
+END="${END:-2025-10-16}"
+CONFIG="${CONFIG:-config/config.yaml}"
 
-export OMP_NUM_THREADS=${BLAS_THREADS}
-export MKL_NUM_THREADS=${BLAS_THREADS}
-export NUMEXPR_NUM_THREADS=${BLAS_THREADS}
+# threads & device
+export OMP_NUM_THREADS="${BLAS_THREADS:-6}"
+export MKL_NUM_THREADS="${BLAS_THREADS:-6}"
+export NUMEXPR_NUM_THREADS="${BLAS_THREADS:-6}"
 
-python - <<'PY'
-import torch
-print(f"CUDA available: {torch.cuda.is_available()}")
-PY
+echo "Using Python interpreter: $(which python)"
+echo "CUDA available? $(python - <<'PY'
+import torch;print(torch.cuda.is_available())
+PY)"
 
+# --- 1) download OHLCV to ./data ---
+echo "=== Downloading OHLCV: $SYMBOL ${INTERVAL_SEC}s $START -> $END ==="
 python scripts/download_ohlcv_binance.py \
-  --symbol "${SYMBOL}" \
-  --interval 3600 \
-  --start "${START}" \
-  --end "${END}" \
-  --output-dir data
+  --symbol "$SYMBOL" --interval "$INTERVAL_SEC" \
+  --start "$START" --end "$END" --output-dir data
 
-CSV_PATH=$(python - <<PY
-from datetime import datetime, timezone
-start = datetime.strptime("${START}", "%Y-%m-%d").replace(tzinfo=timezone.utc)
-end = datetime.strptime("${END}", "%Y-%m-%d").replace(tzinfo=timezone.utc)
-start_tag = start.strftime("%b%Y")
-end_tag = end.strftime("%b%Y")
-print(f"data/${SYMBOL.upper()}3600_{start_tag}_{end_tag}.csv")
-PY
-)
+CSV_PATH="$(ls -1 data/${SYMBOL}${INTERVAL_SEC}_*.csv | tail -n1)"
+echo "Saved candles to $CSV_PATH"
 
-python - <<PY
-from pathlib import Path
-import yaml
-cfg_path = Path("${CONFIG}").parent / "data.yaml"
-with cfg_path.open() as f:
-    data_cfg = yaml.safe_load(f)
-data_cfg["symbol"] = "${SYMBOL}"
-data_cfg["start"] = "${START}"
-data_cfg["end"] = "${END}"
-data_cfg["csv_path"] = "${CSV_PATH}"
-with cfg_path.open("w") as f:
-    yaml.safe_dump(data_cfg, f)
-print(f"Updated {cfg_path} -> csv_path={data_cfg['csv_path']}")
-PY
+# --- 2) patch config/data.yaml: csv_path ---
+echo "=== Updating config/data.yaml with csv_path ==="
+# GNU sed (Linux) / BSD sed (macOS) handling
+if sed --version >/dev/null 2>&1; then
+  sed -i "s#^csv_path:.*#csv_path: \"$CSV_PATH\"#g" config/data.yaml
+else
+  sed -i '' "s#^csv_path:.*#csv_path: \"$CSV_PATH\"#g" config/data.yaml
+fi
 
-python -m src.run_offline_pretrain --config "${CONFIG}" --n-workers "${N_WORKERS}"
-python -m src.run_sac_finetune --config "${CONFIG}" --n-workers "${N_WORKERS}"
-python -m src.run_walkforward --config "${CONFIG}" --n-workers "${N_WORKERS}"
+# --- 3) offline pretrain (IQL) ---
+echo "=== Offline pretrain (IQL) ==="
+python -m src.run_offline_pretrain --config "$CONFIG" ${DEVICE:+--device "$DEVICE"}
 
-echo "Summary report: evaluation/reports/summary_report_${SYMBOL}.txt"
+# --- 4) online fine-tune (SAC) ---
+echo "=== Online fine-tune (SAC) ==="
+python -m src.run_sac_finetune --config "$CONFIG" ${DEVICE:+--device "$DEVICE"}
+
+# --- 5) walk-forward evaluation ---
+echo "=== Walk-forward evaluation (reports & charts) ==="
+python -m src.run_walkforward --config "$CONFIG" ${DEVICE:+--device "$DEVICE"}
+
+echo "=== Latest summary ==="
+ls -1 evaluation/reports/summary_report_*.txt || true
+echo "=== Done ==="

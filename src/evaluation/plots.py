@@ -1,45 +1,24 @@
-from __future__ import annotations
-
-from pathlib import Path
-from typing import Dict
-
-import pandas as pd
 import plotly.graph_objects as go
 import vectorbt as vbt
-
 from src.utils.io_utils import save_html
 
-
-def candlestick(df_ohlc: pd.DataFrame, signals: pd.Series | None, path_html: Path | str) -> None:
-    fig = go.Figure(
-        data=[
-            go.Candlestick(
-                x=df_ohlc.index,
-                open=df_ohlc["open"],
-                high=df_ohlc["high"],
-                low=df_ohlc["low"],
-                close=df_ohlc["close"],
-                name="Price",
-            )
-        ]
-    )
-    if signals is not None:
-        fig.add_trace(
-            go.Scatter(
-                x=signals.index,
-                y=df_ohlc.loc[signals.index, "close"],
-                mode="markers",
-                marker=dict(color="#1f77b4", size=6),
-                name="Signals",
-            )
-        )
-    fig.update_layout(template="plotly_dark")
+def candlestick_html(df_ohlc, signals, path_html):
+    fig = go.Figure(data=[go.Candlestick(
+        x=df_ohlc.index, open=df_ohlc["open"], high=df_ohlc["high"],
+        low=df_ohlc["low"], close=df_ohlc["close"]
+    )])
+    # overlay signals (green up, red down)
+    sig = signals.reindex(df_ohlc.index).fillna(0)
+    buys = df_ohlc.index[sig.values>0]; sells = df_ohlc.index[sig.values<0]
+    fig.add_scatter(x=buys, y=df_ohlc["close"].reindex(buys), mode="markers", name="Long", marker_symbol="triangle-up")
+    fig.add_scatter(x=sells,y=df_ohlc["close"].reindex(sells),mode="markers", name="Short", marker_symbol="triangle-down")
     save_html(fig, path_html)
 
-
-def equity_plot(equity: pd.DataFrame, benchmarks: Dict[str, pd.Series], path_html: Path | str) -> None:
-    data = equity.copy()
-    for name, series in benchmarks.items():
-        data[name] = series.reindex(data.index, method="ffill")
-    fig = data.vbt.plot()
+def equity_html(equity, benchmarks: dict, path_html):
+    _ = vbt.Portfolio.from_orders(close=equity.index.to_series().map(lambda _: 1.0),
+                                  size=0, freq="H")  # dummy portfolio for plotting
+    fig = go.Figure()
+    fig.add_scatter(x=equity.index, y=equity.values, name="strategy")
+    for k,v in (benchmarks or {}).items():
+        fig.add_scatter(x=v.index, y=v.values, name=k)
     save_html(fig, path_html)

@@ -1,39 +1,26 @@
-from __future__ import annotations
+import argparse, os
+from src.utils.seed import seed_everything
 
-import argparse
-from importlib import import_module
+def main():
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for name in ("offline-pretrain","sac-finetune","walkforward"):
+        sp = sub.add_parser(name)
+        sp.add_argument("--config", default="config/config.yaml")
+        sp.add_argument("--device", choices=["cpu","cuda"], default=None)
+        sp.add_argument("--seed", type=int, default=42)
+    args = ap.parse_args()
+    os.environ["CONFIG"] = args.config
+    if args.device: os.environ["QA_DEVICE"]=args.device
 
+    seed_everything(args.seed)
 
-COMMAND_MODULES = {
-    "offline-pretrain": "src.run_offline_pretrain",
-    "sac-finetune": "src.drl.online.sac_train",
-    "walkforward": "src.run_walkforward",
-}
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="algo-drl-sac-iql CLI")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    def add_common(subparser: argparse.ArgumentParser) -> None:
-        subparser.add_argument("--config", default="config/config.yaml")
-        subparser.add_argument("--device", default=None)
-        subparser.add_argument("--seed", type=int, default=None)
-        subparser.add_argument("--n-workers", type=int, default=None)
-        subparser.add_argument("--log-level", default=None)
-
-    add_common(subparsers.add_parser("offline-pretrain"))
-    add_common(subparsers.add_parser("sac-finetune"))
-    add_common(subparsers.add_parser("walkforward"))
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    module_name = COMMAND_MODULES[args.command]
-    module = import_module(module_name)
-    module.main()
-
+    if args.cmd=="offline-pretrain":
+        from src.drl.offline.iql_pretrain import main as run; run()
+    elif args.cmd=="sac-finetune":
+        from src.drl.online.sac_train import main as run; run()
+    else:
+        from src.run_walkforward import run; run()
 
 if __name__ == "__main__":
     main()

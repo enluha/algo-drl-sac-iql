@@ -1,108 +1,60 @@
-from __future__ import annotations
-
-import argparse
-import logging
+import os, logging
 from pathlib import Path
-
 import pandas as pd
-from d3rlpy.algos import IQL
+from d3rlpy.algos import IQL, IQLConfig
 from d3rlpy.models.encoders import VectorEncoderFactory
-
-from src.envs.dataset_builder import build_offline_dataset
+from src.utils.io_utils import load_yaml
+from src.utils.logging_utils import get_logger
+from src.utils.device import get_torch_device, log_device, set_num_threads
 from src.features.engineering import build_features
 from src.features.normalizer import RollingZScore
-from src.utils import device as device_utils
-from src.utils import io_utils
-from src.utils.seed import seed_everything
+from src.envs.dataset_builder import build_offline_dataset
 
+def _load_config() -> dict:
+    cfg_path = Path(os.getenv("CONFIG","config/config.yaml"))
+    cfg = load_yaml(cfg_path)
+    if "data" not in cfg:
+        raise KeyError(f"Config hub {cfg_path} missing required sections")
+    return cfg
 
-def _load_price_data(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path, parse_dates=["date"], index_col="date")
-    df.index = df.index.tz_localize("UTC")
-    return df.sort_index()
+def main():
+    cfg = _load_config()
+    data_cfg, env_cfg, algo_cfg, rt_cfg = cfg["data"], cfg["env"], cfg["algo_iql"], cfg["runtime"]
+    logger = get_logger("iql_pretrain", level=rt_cfg.get("log_level","INFO"))
+    set_num_threads(rt_cfg.get("blas_threads",6))
+    device = get_torch_device(None); log_device(logger)
 
+    # load data
+    df = pd.read_csv(data_cfg["csv_path"], parse_dates=["date"]).set_index("date")
+    df = df.rename(columns=str.lower)
+    feats = build_features(df)
+    # normalizer fit on whole offline set (acceptable in pure offline; WFA will re-fit)
+    norm = RollingZScore(window=500).fit(feats)
+    feats_n = norm.transform(feats)
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Offline IQL pretraining entrypoint")
-    parser.add_argument("--config", default="config/config.yaml")
-    parser.add_argument("--device", default=None)
-    parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--n-workers", type=int, default=1)
-    parser.add_argument("--log-level", default=None)
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    config = io_utils.load_nested_config(args.config)
-
-    runtime_cfg = config.get("runtime", {})
-    log_level = args.log_level or runtime_cfg.get("log_level", "INFO")
-    logging.basicConfig(level=getattr(logging, log_level))
-    logger = logging.getLogger("offline_pretrain")
-
-    seed = args.seed or runtime_cfg.get("seed", 42)
-    seed_everything(seed)
-
-    blas_threads = runtime_cfg.get("blas_threads", 6)
-    device_utils.set_num_threads(blas_threads)
-    torch_device = device_utils.get_torch_device(args.device or config["algo_iql"].get("device"))
-    device_utils.log_device(logger)
-
-    data_cfg = config["data"]
-    data_path = Path(data_cfg["csv_path"])
-    if not data_path.exists():
-        raise FileNotFoundError(f"Data CSV not found at {data_path}")
-    df = _load_price_data(data_path)
-
-    features = build_features(df)
-    normalizer = RollingZScore()
-    normalizer.fit_partial(features)
-    norm_features = normalizer.transform(features)
-
-    env_cfg = config["env"]
-    algo_cfg = config["algo_iql"]
-    costs_cfg = config["costs"]
-
-    dataset = build_offline_dataset(
-        df,
-        norm_features,
-        env_cfg,
-        env_cfg["reward"],
-        costs_cfg,
-        artifact_path=Path("evaluation/artifacts/offline_dataset.h5"),
-    )
-
-    encoder_factory = VectorEncoderFactory(hidden_units=algo_cfg["encoder"]["mlp_hidden"])
-    iql = IQL(
-        expectile=algo_cfg["expectile_beta"],
-        temperature=algo_cfg["temperature"],
-        discount=algo_cfg["discount"],
+    dset = build_offline_dataset(df[["open","high","low","close"]], feats_n, env_cfg)
+    hidden = tuple(algo_cfg["encoder"]["mlp_hidden"])
+    encoder = VectorEncoderFactory(hidden_units=hidden)
+    config_iql = IQLConfig(
         batch_size=algo_cfg["batch_size"],
+        gamma=algo_cfg["discount"],
         actor_learning_rate=algo_cfg["lr"],
         critic_learning_rate=algo_cfg["lr"],
-        value_learning_rate=algo_cfg["lr"],
-        encoder_factory=encoder_factory,
-        device=torch_device.type,
+        expectile=algo_cfg["expectile_beta"],
+        weight_temp=algo_cfg["temperature"],
+        actor_encoder_factory=encoder,
+        critic_encoder_factory=encoder,
+        value_encoder_factory=encoder,
     )
-    iql.build_with_dataset(dataset)
-
-    artifacts_dir = Path("evaluation/artifacts")
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    models_path = artifacts_dir / "iql_policy.d3"
-    iql.save_model(str(models_path))
-
-    io_utils.cache_pickle(normalizer, artifacts_dir / "normalizer.pkl")
-
-    summary = {
-        "device": torch_device.type,
-        "dataset_size": int(dataset.observations.shape[0]),
-        "grad_steps": algo_cfg["grad_steps"],
-        "batch_size": algo_cfg["batch_size"],
-    }
-    io_utils.save_json(summary, Path("evaluation/reports/offline_summary.json"))
-    logger.info("Offline pretraining artifacts saved to %s", artifacts_dir)
-
-
+    agent = IQL(config=config_iql, device=device.type, enable_ddp=False)
+    out = Path("evaluation/artifacts"); out.mkdir(parents=True, exist_ok=True)
+    agent.fit(
+        dset,
+        n_steps=int(os.getenv("QA_STEPS", algo_cfg["grad_steps"])),
+        save_interval=int(1e9),  # disable periodic saves
+    )
+    agent.save_model(str(out / "iql_policy.d3"))
+    norm.save(out / "normalizer.pkl")
+    logger.info("Offline IQL pretrained → artifacts saved.")
 if __name__ == "__main__":
     main()
