@@ -1,6 +1,0 @@
-scheme: "cpcv"        # "time_split" | "purged" | "cpcv"
-n_folds: 8
-n_test_folds: 2
-purge_bars: 24
-embargo_bars: 24
-step: "30d"

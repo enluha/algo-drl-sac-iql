@@ -1,6 +1,4 @@
-"""
-MVP - IO utilities for YAML/CSV/JSON and pickles.
-"""
+"""General IO helpers for configuration, tabular data, and artifacts."""
 
 from __future__ import annotations
 
@@ -14,25 +12,13 @@ import yaml
 
 
 def load_yaml(path: str | Path) -> dict:
-    """MVP - Load a YAML file into a dict.
-
-    Params:
-        path: pathlike pointing to YAML file.
-
-    Returns:
-        Parsed YAML content as dictionary.
-    """
+    """Load a YAML file into a dictionary."""
     with open(path, "r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
 
 
 def save_json(obj: Any, path: str | Path) -> None:
-    """MVP - Serialize object to JSON with indentation.
-
-    Params:
-        obj: JSON-serializable object.
-        path: destination path for JSON file.
-    """
+    """Serialize an object to JSON with indentation."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
@@ -40,12 +26,7 @@ def save_json(obj: Any, path: str | Path) -> None:
 
 
 def save_csv(df_or_arr: Any, path: str | Path) -> None:
-    """MVP - Save pandas DataFrame or ndarray-like to CSV.
-
-    Params:
-        df_or_arr: object with to_csv or array-like convertible to DataFrame.
-        path: destination path for CSV.
-    """
+    """Persist a pandas DataFrame or array-like object as CSV."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if hasattr(df_or_arr, "to_csv"):
@@ -56,12 +37,7 @@ def save_csv(df_or_arr: Any, path: str | Path) -> None:
 
 
 def cache_pickle(obj: Any, path: str | Path) -> None:
-    """MVP - Serialize object to pickle.
-
-    Params:
-        obj: Python object to persist.
-        path: destination path for pickle file.
-    """
+    """Serialize an object to pickle."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as handle:
@@ -69,27 +45,13 @@ def cache_pickle(obj: Any, path: str | Path) -> None:
 
 
 def load_pickle(path: str | Path) -> Any:
-    """MVP - Load object from pickle.
-
-    Params:
-        path: path to pickle file.
-
-    Returns:
-        Deserialized Python object.
-    """
+    """Deserialize an object from pickle."""
     with open(path, "rb") as handle:
         return pickle.load(handle)
 
 
 def load_nested_config(path: str | Path) -> dict:
-    """MVP - Load master config supporting include directives.
-
-    Params:
-        path: path to master YAML file.
-
-    Returns:
-        Aggregated configuration dictionary keyed by included file stem.
-    """
+    """Load master config supporting include directives."""
     path = Path(path)
     master = load_yaml(path)
     if "include" not in master:
@@ -100,3 +62,23 @@ def load_nested_config(path: str | Path) -> dict:
         sub_path = path.parent / rel
         config[sub_path.stem] = load_yaml(sub_path)
     return config
+
+
+def save_html(fig: Any, path: str | Path) -> None:
+    """Persist a Plotly figure or HTML string to disk."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if hasattr(fig, "to_html"):
+        html = fig.to_html(full_html=True, include_plotlyjs="cdn")
+    else:
+        html = str(fig)
+    path.write_text(html, encoding="utf-8")
+
+
+def atomic_write_text(path: str | Path, text: str) -> None:
+    """Atomically write text to a file by using a temporary file swap."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(text, encoding="utf-8")
+    tmp_path.replace(path)

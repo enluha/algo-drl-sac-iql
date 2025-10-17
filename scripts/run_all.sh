@@ -1,79 +1,56 @@
 #!/usr/bin/env bash
-# Glue script: download OHLCV -> update config -> train -> backtest -> report
 set -euo pipefail
 
-# -------- Defaults (override by exporting env vars) --------
-SYMBOL="${SYMBOL:-BTCUSDT}"
-INTERVAL="${INTERVAL:-3600}"          # seconds (3600 = 1h)
-START="${START:-2024-06-10}"
-END="${END:-2025-10-16}"
-BLAS_THREADS="${BLAS_THREADS:-6}"
-N_WORKERS="${N_WORKERS:-1}"
-LOG_LEVEL="${LOG_LEVEL:-INFO}"
-CONFIG="${CONFIG:-config/config.yaml}"
-DATA_DIR="${DATA_DIR:-data}"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+SYMBOL=${SYMBOL:-BTCUSDT}
+START=${START:-2024-06-10}
+END=${END:-2025-10-16}
+BLAS_THREADS=${BLAS_THREADS:-6}
+N_WORKERS=${N_WORKERS:-1}
+CONFIG=${CONFIG:-config/config.yaml}
 
-# -------- Resolve Python interpreter --------
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  if [[ -x ".venv/Scripts/python.exe" ]]; then
-    PYTHON_BIN=".venv/Scripts/python.exe"
-  elif [[ -x ".venv/bin/python" ]]; then
-    PYTHON_BIN=".venv/bin/python"
-  elif command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="python3"
-  else
-    echo "ERROR: Unable to locate a Python interpreter. Set PYTHON_BIN." >&2
-    exit 1
-  fi
-fi
+export OMP_NUM_THREADS=${BLAS_THREADS}
+export MKL_NUM_THREADS=${BLAS_THREADS}
+export NUMEXPR_NUM_THREADS=${BLAS_THREADS}
 
-echo "Using Python interpreter: $PYTHON_BIN"
+python - <<'PY'
+import torch
+print(f"CUDA available: {torch.cuda.is_available()}")
+PY
 
-export OMP_NUM_THREADS="$BLAS_THREADS"
-export MKL_NUM_THREADS="$BLAS_THREADS"
-export OPENBLAS_NUM_THREADS="$BLAS_THREADS"
-export NUMEXPR_NUM_THREADS="$BLAS_THREADS"
+python scripts/download_ohlcv_binance.py \
+  --symbol "${SYMBOL}" \
+  --interval 3600 \
+  --start "${START}" \
+  --end "${END}" \
+  --output-dir data
 
-echo "=== Downloading OHLCV: $SYMBOL ${INTERVAL}s $START -> $END ==="
-mkdir -p "$DATA_DIR"
-"$PYTHON_BIN" -m src.data.fetchers \
-  --symbol "$SYMBOL" \
-  --interval "$INTERVAL" \
-  --start "$START" \
-  --end "$END" \
-  --output-dir "$DATA_DIR"
+CSV_PATH=$(python - <<PY
+from datetime import datetime, timezone
+start = datetime.strptime("${START}", "%Y-%m-%d").replace(tzinfo=timezone.utc)
+end = datetime.strptime("${END}", "%Y-%m-%d").replace(tzinfo=timezone.utc)
+start_tag = start.strftime("%b%Y")
+end_tag = end.strftime("%b%Y")
+print(f"data/${SYMBOL.upper()}3600_{start_tag}_{end_tag}.csv")
+PY
+)
 
-echo "=== Locating latest CSV in $DATA_DIR ==="
-CSV_PATH="$(ls -t "$DATA_DIR"/"${SYMBOL}${INTERVAL}"_*.csv | head -n 1)"
-if [[ -z "${CSV_PATH:-}" ]]; then
-  echo "ERROR: Could not find downloaded CSV for ${SYMBOL}${INTERVAL}_*.csv"
-  exit 1
-fi
-echo "Using CSV_PATH=$CSV_PATH"
+python - <<PY
+from pathlib import Path
+import yaml
+cfg_path = Path("${CONFIG}").parent / "data.yaml"
+with cfg_path.open() as f:
+    data_cfg = yaml.safe_load(f)
+data_cfg["symbol"] = "${SYMBOL}"
+data_cfg["start"] = "${START}"
+data_cfg["end"] = "${END}"
+data_cfg["csv_path"] = "${CSV_PATH}"
+with cfg_path.open("w") as f:
+    yaml.safe_dump(data_cfg, f)
+print(f"Updated {cfg_path} -> csv_path={data_cfg['csv_path']}")
+PY
 
-echo "=== Updating config/data.yaml with csv_path ==="
-if command -v sed >/dev/null 2>&1; then
-  sed -i.bak -E "s|^csv_path:.*$|csv_path: \"${CSV_PATH//\//\\/}\"|" config/data.yaml
-else
-  echo "WARN: sed not available; please set csv_path manually in config/data.yaml"
-fi
+python -m src.run_offline_pretrain --config "${CONFIG}" --n-workers "${N_WORKERS}"
+python -m src.run_sac_finetune --config "${CONFIG}" --n-workers "${N_WORKERS}"
+python -m src.run_walkforward --config "${CONFIG}" --n-workers "${N_WORKERS}"
 
-echo "=== Training (walk-forward artifacts) ==="
-"$PYTHON_BIN" -m src.cli train \
-  --config "$CONFIG" \
-  --blas-threads "$BLAS_THREADS" \
-  --n-workers "$N_WORKERS" \
-  --log-level "$LOG_LEVEL"
-
-echo "=== Backtesting (validation thresholds, simulation, plots) ==="
-"$PYTHON_BIN" -m src.cli backtest \
-  --config "$CONFIG" \
-  --blas-threads "$BLAS_THREADS" \
-  --n-workers "$N_WORKERS" \
-  --log-level "$LOG_LEVEL"
-
-echo "=== Latest summary ==="
-"$PYTHON_BIN" -m src.cli report --config "$CONFIG" --log-level "$LOG_LEVEL" || true
-
-echo "=== Done ==="
+echo "Summary report: evaluation/reports/summary_report_${SYMBOL}.txt"

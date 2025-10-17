@@ -1,0 +1,4 @@
+train_days: 270
+valid_days: 60
+test_days: 30
+step_days: 30

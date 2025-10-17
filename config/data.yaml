@@ -1,8 +1,8 @@
-symbol: BTCUSDT        # MVP
-bar: "1h"              # MVP (align with downloader)
-start: "2024-06-10"    # MVP
-end:   "2025-10-12"    # MVP
-cache: "evaluation/artifacts/cache"  # MVP
-na_policy: "ffill"     # MVP
-source: "csv"          # MVP: csv | rest
+symbol: BTCUSDT
+bar: "1h"
+start: "2024-06-10"
+end: "2025-10-16"
+source: "csv"
 csv_path: "data/BTCUSDT3600_Jun2024_Oct2025.csv"
+na_policy: "ffill"
+cache: "evaluation/artifacts/cache"
