@@ -1,0 +1,12 @@
+expectile_beta: 0.8
+temperature: 0.3
+discount: 0.99
+lr: 0.0003
+batch_size: 1024
+grad_steps: 1500000
+encoder:
+  type: "tcn"
+  channels: [64, 128, 128]
+  kernel_size: 5
+  mlp_hidden: [256, 256]
+device: "cuda"

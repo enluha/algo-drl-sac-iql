@@ -1,79 +1,65 @@
 #!/usr/bin/env bash
-# Glue script: download OHLCV -> update config -> train -> backtest -> report
 set -euo pipefail
 
-# -------- Defaults (override by exporting env vars) --------
-SYMBOL="${SYMBOL:-BTCUSDT}"
-INTERVAL="${INTERVAL:-3600}"          # seconds (3600 = 1h)
-START="${START:-2024-06-10}"
-END="${END:-2025-10-16}"
-BLAS_THREADS="${BLAS_THREADS:-6}"
-N_WORKERS="${N_WORKERS:-1}"
-LOG_LEVEL="${LOG_LEVEL:-INFO}"
-CONFIG="${CONFIG:-config/config.yaml}"
-DATA_DIR="${DATA_DIR:-data}"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$PROJECT_ROOT"
 
-# -------- Resolve Python interpreter --------
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  if [[ -x ".venv/Scripts/python.exe" ]]; then
-    PYTHON_BIN=".venv/Scripts/python.exe"
-  elif [[ -x ".venv/bin/python" ]]; then
-    PYTHON_BIN=".venv/bin/python"
-  elif command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="python3"
-  else
-    echo "ERROR: Unable to locate a Python interpreter. Set PYTHON_BIN." >&2
-    exit 1
-  fi
-fi
+SYMBOL=${SYMBOL:-BTCUSDT}
+START=${START:-2024-06-10}
+END=${END:-2025-10-16}
+CONFIG=${CONFIG:-config/config.yaml}
+BLAS_THREADS=${BLAS_THREADS:-6}
+N_WORKERS=${N_WORKERS:-1}
 
-echo "Using Python interpreter: $PYTHON_BIN"
+export OMP_NUM_THREADS=${BLAS_THREADS}
+export MKL_NUM_THREADS=${BLAS_THREADS}
+export NUMEXPR_NUM_THREADS=${BLAS_THREADS}
+export BLAS_THREADS
+export N_WORKERS
 
-export OMP_NUM_THREADS="$BLAS_THREADS"
-export MKL_NUM_THREADS="$BLAS_THREADS"
-export OPENBLAS_NUM_THREADS="$BLAS_THREADS"
-export NUMEXPR_NUM_THREADS="$BLAS_THREADS"
+python - <<'PY'
+import torch
+print(f"CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    idx = torch.cuda.current_device()
+    print(f"Using CUDA device {idx}: {torch.cuda.get_device_name(idx)}")
+PY
 
-echo "=== Downloading OHLCV: $SYMBOL ${INTERVAL}s $START -> $END ==="
-mkdir -p "$DATA_DIR"
-"$PYTHON_BIN" -m src.data.fetchers \
+CSV_PATH=$(python - <<PY
+import datetime as dt
+symbol = "${SYMBOL}"
+start = dt.datetime.fromisoformat("${START}")
+end = dt.datetime.fromisoformat("${END}")
+print(f"data/{symbol.upper()}3600_{start.strftime('%b%Y')}_{end.strftime('%b%Y')}.csv")
+PY
+)
+
+python scripts/download_ohlcv_binance.py \
   --symbol "$SYMBOL" \
-  --interval "$INTERVAL" \
+  --interval 3600 \
   --start "$START" \
   --end "$END" \
-  --output-dir "$DATA_DIR"
+  --output-dir data
 
-echo "=== Locating latest CSV in $DATA_DIR ==="
-CSV_PATH="$(ls -t "$DATA_DIR"/"${SYMBOL}${INTERVAL}"_*.csv | head -n 1)"
-if [[ -z "${CSV_PATH:-}" ]]; then
-  echo "ERROR: Could not find downloaded CSV for ${SYMBOL}${INTERVAL}_*.csv"
-  exit 1
-fi
-echo "Using CSV_PATH=$CSV_PATH"
+python - <<PY
+from pathlib import Path
+import yaml
+config_path = Path("config/data.yaml")
+with config_path.open() as fh:
+    cfg = yaml.safe_load(fh)
+cfg["csv_path"] = "${CSV_PATH}"
+with config_path.open("w") as fh:
+    yaml.safe_dump(cfg, fh, sort_keys=False)
+print(f"Updated config/data.yaml: csv_path -> {cfg['csv_path']}")
+PY
 
-echo "=== Updating config/data.yaml with csv_path ==="
-if command -v sed >/dev/null 2>&1; then
-  sed -i.bak -E "s|^csv_path:.*$|csv_path: \"${CSV_PATH//\//\\/}\"|" config/data.yaml
+python -m src.run_offline_pretrain --config "$CONFIG"
+python -m src.run_sac_finetune --config "$CONFIG"
+python -m src.run_walkforward --config "$CONFIG"
+
+REPORT_PATH="evaluation/reports/summary_report_${SYMBOL}.txt"
+if [[ -s "$REPORT_PATH" ]]; then
+  echo "Summary report generated at $REPORT_PATH"
 else
-  echo "WARN: sed not available; please set csv_path manually in config/data.yaml"
+  echo "Warning: summary report missing or empty at $REPORT_PATH" >&2
 fi
-
-echo "=== Training (walk-forward artifacts) ==="
-"$PYTHON_BIN" -m src.cli train \
-  --config "$CONFIG" \
-  --blas-threads "$BLAS_THREADS" \
-  --n-workers "$N_WORKERS" \
-  --log-level "$LOG_LEVEL"
-
-echo "=== Backtesting (validation thresholds, simulation, plots) ==="
-"$PYTHON_BIN" -m src.cli backtest \
-  --config "$CONFIG" \
-  --blas-threads "$BLAS_THREADS" \
-  --n-workers "$N_WORKERS" \
-  --log-level "$LOG_LEVEL"
-
-echo "=== Latest summary ==="
-"$PYTHON_BIN" -m src.cli report --config "$CONFIG" --log-level "$LOG_LEVEL" || true
-
-echo "=== Done ==="

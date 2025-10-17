@@ -8,5 +8,15 @@ __pycache__/
 *.html
 *.log
 temp*
-/evaluation/
-/data/
+/evaluation/*
+!/evaluation/.gitkeep
+!/evaluation/artifacts/
+!/evaluation/artifacts/.gitkeep
+!/evaluation/charts/
+!/evaluation/charts/.gitkeep
+!/evaluation/reports/
+!/evaluation/reports/.gitkeep
+!/evaluation/trades/
+!/evaluation/trades/.gitkeep
+/data/*
+!/data/.gitkeep

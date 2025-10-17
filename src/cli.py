@@ -1,48 +1,56 @@
-"""
-MVP - CLI orchestrator: sets BLAS threads, passes n_workers/log_level through.
-"""
+from __future__ import annotations
 
-import os, argparse
+import argparse
 
-def parse_args():
-    p = argparse.ArgumentParser()
-    sub = p.add_subparsers(dest="cmd", required=True)
+from src.run_offline_pretrain import main as offline_main
+from src.run_sac_finetune import main as sac_main
+from src.run_walkforward import main as walk_main
 
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--config", default="config/config.yaml")
-    common.add_argument("--blas-threads", type=int, default=None)
-    common.add_argument("--n-workers", type=int, default=None)
-    common.add_argument("--log-level", default=None)
 
-    sub.add_parser("train", parents=[common])
-    sub.add_parser("backtest", parents=[common])
-    sub.add_parser("report", parents=[common])
-    return p.parse_args()
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="algo-drl-sac-iql CLI")
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-def set_env_threads(k: int | None):
-    if k is None: return
-    os.environ["OMP_NUM_THREADS"] = str(k)
-    os.environ["MKL_NUM_THREADS"] = str(k)
-    os.environ["OPENBLAS_NUM_THREADS"] = str(k)
-    os.environ["NUMEXPR_NUM_THREADS"] = str(k)
+    def add_common(sub):
+        sub.add_argument("--config", default="config/config.yaml")
+        sub.add_argument("--device", default=None)
+        sub.add_argument("--seed", type=int, default=None)
+        sub.add_argument("--n-workers", type=int, default=None)
+        sub.add_argument("--log-level", default=None)
+        sub.add_argument("--blas-threads", type=int, default=None)
+        return sub
 
-def main():
-    args = parse_args()
-    # load runtime to get defaults for blas/n_workers/log_level
-    from .utils.io_utils import load_yaml
-    runtime = load_yaml("config/runtime.yaml")
-    blas_threads = args.blas_threads or runtime.get("blas_threads", 6)
-    set_env_threads(blas_threads)
+    add_common(subparsers.add_parser("offline-pretrain", help="Run offline IQL pretraining"))
+    add_common(subparsers.add_parser("sac-finetune", help="Run SAC fine-tuning"))
+    add_common(subparsers.add_parser("walkforward", help="Run walk-forward evaluation"))
 
-    # Inject effective runtime overrides into args for downstream
-    args.n_workers = args.n_workers if args.n_workers is not None else runtime.get("n_workers", 1)
-    args.log_level = args.log_level if args.log_level is not None else runtime.get("log_level", "INFO")
-    args.blas_threads = blas_threads
+    return parser
 
-    from . import main_train, main_backtest, main_report
-    if args.cmd == "train":     main_train.main(args)
-    elif args.cmd == "backtest": main_backtest.main(args)
-    elif args.cmd == "report":   main_report.main(args)
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    base_args = ["--config", args.config]
+    if args.device:
+        base_args.extend(["--device", args.device])
+    if args.seed is not None:
+        base_args.extend(["--seed", str(args.seed)])
+    if args.n_workers is not None:
+        base_args.extend(["--n-workers", str(args.n_workers)])
+    if args.log_level:
+        base_args.extend(["--log-level", args.log_level])
+    if args.blas_threads is not None:
+        base_args.extend(["--blas-threads", str(args.blas_threads)])
+
+    if args.command == "offline-pretrain":
+        offline_main(base_args)
+    elif args.command == "sac-finetune":
+        sac_main(base_args)
+    elif args.command == "walkforward":
+        walk_main(base_args)
+    else:
+        parser.error(f"Unknown command {args.command}")
 
 
 if __name__ == "__main__":
