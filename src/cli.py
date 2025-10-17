@@ -1,48 +1,38 @@
-"""
-MVP - CLI orchestrator: sets BLAS threads, passes n_workers/log_level through.
-"""
+from __future__ import annotations
 
-import os, argparse
+import argparse
+from importlib import import_module
 
-def parse_args():
-    p = argparse.ArgumentParser()
-    sub = p.add_subparsers(dest="cmd", required=True)
 
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--config", default="config/config.yaml")
-    common.add_argument("--blas-threads", type=int, default=None)
-    common.add_argument("--n-workers", type=int, default=None)
-    common.add_argument("--log-level", default=None)
+COMMAND_MODULES = {
+    "offline-pretrain": "src.run_offline_pretrain",
+    "sac-finetune": "src.drl.online.sac_train",
+    "walkforward": "src.run_walkforward",
+}
 
-    sub.add_parser("train", parents=[common])
-    sub.add_parser("backtest", parents=[common])
-    sub.add_parser("report", parents=[common])
-    return p.parse_args()
 
-def set_env_threads(k: int | None):
-    if k is None: return
-    os.environ["OMP_NUM_THREADS"] = str(k)
-    os.environ["MKL_NUM_THREADS"] = str(k)
-    os.environ["OPENBLAS_NUM_THREADS"] = str(k)
-    os.environ["NUMEXPR_NUM_THREADS"] = str(k)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="algo-drl-sac-iql CLI")
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-def main():
+    def add_common(subparser: argparse.ArgumentParser) -> None:
+        subparser.add_argument("--config", default="config/config.yaml")
+        subparser.add_argument("--device", default=None)
+        subparser.add_argument("--seed", type=int, default=None)
+        subparser.add_argument("--n-workers", type=int, default=None)
+        subparser.add_argument("--log-level", default=None)
+
+    add_common(subparsers.add_parser("offline-pretrain"))
+    add_common(subparsers.add_parser("sac-finetune"))
+    add_common(subparsers.add_parser("walkforward"))
+    return parser.parse_args()
+
+
+def main() -> None:
     args = parse_args()
-    # load runtime to get defaults for blas/n_workers/log_level
-    from .utils.io_utils import load_yaml
-    runtime = load_yaml("config/runtime.yaml")
-    blas_threads = args.blas_threads or runtime.get("blas_threads", 6)
-    set_env_threads(blas_threads)
-
-    # Inject effective runtime overrides into args for downstream
-    args.n_workers = args.n_workers if args.n_workers is not None else runtime.get("n_workers", 1)
-    args.log_level = args.log_level if args.log_level is not None else runtime.get("log_level", "INFO")
-    args.blas_threads = blas_threads
-
-    from . import main_train, main_backtest, main_report
-    if args.cmd == "train":     main_train.main(args)
-    elif args.cmd == "backtest": main_backtest.main(args)
-    elif args.cmd == "report":   main_report.main(args)
+    module_name = COMMAND_MODULES[args.command]
+    module = import_module(module_name)
+    module.main()
 
 
 if __name__ == "__main__":

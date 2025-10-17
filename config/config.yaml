@@ -1,6 +1,8 @@
 include:
   - data.yaml
-  - model.yaml
-  - cv.yaml
-  - costs.yaml
+  - env.yaml
+  - algo_iql.yaml
+  - algo_sac.yaml
+  - walkforward.yaml
   - runtime.yaml
+  - costs.yaml
