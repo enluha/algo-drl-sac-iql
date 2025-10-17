@@ -59,16 +59,19 @@ def main():
 
     buf = FIFOBuffer(algo_cfg["buffer_size"])
     obs, _ = env.reset()
+    obs = obs.astype(np.float32)
     steps = int(os.getenv("QA_STEPS", 100000))
     for _ in range(steps):
-        action = agent.predict(obs[np.newaxis,...])[0]
+        obs_batch = obs.astype(np.float32)
+        action = agent.predict(obs_batch[np.newaxis,...])[0].astype(np.float32)
         nobs, reward, terminated, truncated, info = env.step(action)
-        buf.append(obs, action, reward, terminated)
-        obs = nobs
+        buf.append(obs_batch, action, np.float32(reward), bool(terminated))
+        obs = nobs.astype(np.float32)
         if len(buf) >= agent.batch_size:
             agent.update(buf, n_steps=1)
         if terminated or truncated:
             obs, _ = env.reset()
+            obs = obs.astype(np.float32)
 
     artifacts = Path("evaluation/artifacts"); artifacts.mkdir(parents=True, exist_ok=True)
     agent.save_model(str(artifacts / "sac_policy.d3"))

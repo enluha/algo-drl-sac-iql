@@ -60,11 +60,16 @@ class MarketEnv(gym.Env):
         raw = self._w_prev * ret_t
         turn = abs(a - self._w_prev)
         cost = self.bps * turn
-        # risk penalty via drawdown+
-        eq = self._equity * (1.0 + raw - cost * self.kappa_cost)
+        eq = float(self._equity * (1.0 + raw - cost * self.kappa_cost))
+        if not np.isfinite([raw, cost, eq]).all():
+            raw = 0.0
+            cost = 0.0
+            eq = max(1e-9, float(self._equity))
         self._peak = max(self._peak, eq)
-        ddplus = max(0.0, (self._peak - eq) / self._peak)
+        ddplus = max(0.0, (self._peak - eq) / max(self._peak, 1e-9))
         reward = raw - cost * self.kappa_cost - self.lambda_risk * ddplus
+        if not np.isfinite(reward):
+            reward = 0.0
 
         # advance time & state
         self._equity = eq

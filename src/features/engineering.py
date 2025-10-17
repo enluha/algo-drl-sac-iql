@@ -39,6 +39,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         if df.index.tz is None:
             df.index = df.index.tz_localize("UTC")
     df.index = df.index.tz_convert(None)
+    df = df[df.index.notna()]
     c,h,l,o = df["close"], df["high"], df["low"], df["open"]
     X = pd.DataFrame(index=df.index)
     for k in (1,3,6,12,24): X[f"ret_{k}"] = _logret(c,k)
@@ -62,4 +63,6 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
             X["taker_pressure"] = ((tb - (vol - tb)) / (vol.replace(0,np.nan))).clip(-1,1)
     # session
     X = X.join(_cyc(df.index))
+    X = X.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    X = X.clip(lower=-1e6, upper=1e6)
     return X.astype("float32")

@@ -14,9 +14,11 @@ export MKL_NUM_THREADS="${BLAS_THREADS:-6}"
 export NUMEXPR_NUM_THREADS="${BLAS_THREADS:-6}"
 
 echo "Using Python interpreter: $(which python)"
-echo "CUDA available? $(python - <<'PY'
-import torch;print(torch.cuda.is_available())
-PY)"
+echo -n "CUDA available? "
+python - <<'PY'
+import torch
+print(torch.cuda.is_available())
+PY
 
 # --- 1) download OHLCV to ./data ---
 echo "=== Downloading OHLCV: $SYMBOL ${INTERVAL_SEC}s $START -> $END ==="
