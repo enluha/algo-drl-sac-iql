@@ -3,7 +3,7 @@ temperature: 0.3
 discount: 0.99
 lr: 0.0003
 batch_size: 256
-grad_steps: 3000
+grad_steps: 1000
 compile_graph: true
 actor_encoder_factory:
   type: vector

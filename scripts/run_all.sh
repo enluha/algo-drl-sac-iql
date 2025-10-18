@@ -7,22 +7,29 @@ INTERVAL_SEC="${INTERVAL_SEC:-3600}"
 START="${START:-2024-06-10}"
 END="${END:-2025-10-16}"
 CONFIG="${CONFIG:-config/config.yaml}"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+
+if [ -x ".venv/Scripts/python.exe" ]; then
+  PYTHON_BIN="$(pwd)/.venv/Scripts/python.exe"
+elif [ -x ".venv/bin/python" ]; then
+  PYTHON_BIN="$(pwd)/.venv/bin/python"
+fi
 
 # threads & device
 export OMP_NUM_THREADS="${BLAS_THREADS:-6}"
 export MKL_NUM_THREADS="${BLAS_THREADS:-6}"
 export NUMEXPR_NUM_THREADS="${BLAS_THREADS:-6}"
 
-echo "Using Python interpreter: $(which python)"
+echo "Using Python interpreter: ${PYTHON_BIN}"
 echo -n "CUDA available? "
-CUDA_AVAILABLE=$(python - <<'PY'
+CUDA_AVAILABLE=$("$PYTHON_BIN" - <<'PY'
 import torch
 print("True" if torch.cuda.is_available() else "False")
 PY
 )
 CUDA_AVAILABLE=${CUDA_AVAILABLE//$'\r'/}
 echo "${CUDA_AVAILABLE}"
-echo "CUDA visible?: $(python - <<'PY'
+echo "CUDA visible?: $("$PYTHON_BIN" - <<'PY'
 import torch
 print(torch.cuda.is_available(), 'torch_cuda', torch.version.cuda)
 PY
@@ -37,7 +44,7 @@ fi
 
 # --- 1) download OHLCV to ./data ---
 echo "=== Downloading OHLCV: $SYMBOL ${INTERVAL_SEC}s $START -> $END ==="
-python scripts/download_ohlcv_binance.py \
+"$PYTHON_BIN" scripts/download_ohlcv_binance.py \
   --symbol "$SYMBOL" --interval "$INTERVAL_SEC" \
   --start "$START" --end "$END" --output-dir data
 
@@ -55,15 +62,15 @@ fi
 
 # --- 3) offline pretrain (IQL) ---
 echo "=== Offline pretrain (IQL) ==="
-python -m src.run_offline_pretrain --config "$CONFIG" ${DEVICE:+--device "$DEVICE"}
+"$PYTHON_BIN" -m src.run_offline_pretrain --config "$CONFIG" ${DEVICE:+--device "$DEVICE"}
 
 # --- 4) online fine-tune (SAC) ---
 echo "=== Online fine-tune (SAC) ==="
-python -m src.run_sac_finetune --config "$CONFIG" ${DEVICE:+--device "$DEVICE"}
+"$PYTHON_BIN" -m src.run_sac_finetune --config "$CONFIG" ${DEVICE:+--device "$DEVICE"}
 
 # --- 5) walk-forward evaluation ---
 echo "=== Walk-forward evaluation (reports & charts) ==="
-python -m src.run_walkforward --config "$CONFIG" ${DEVICE:+--device "$DEVICE"}
+"$PYTHON_BIN" -m src.run_walkforward --config "$CONFIG" ${DEVICE:+--device "$DEVICE"}
 
 echo "=== Latest summary ==="
 ls -1 evaluation/reports/summary_report_*.txt || true

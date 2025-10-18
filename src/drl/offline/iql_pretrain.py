@@ -37,8 +37,15 @@ def main():
     set_num_threads(rt_cfg.get("blas_threads",6))
     device = get_torch_device(None); log_device(logger)
 
-    df = pd.read_csv(data_cfg["csv_path"], parse_dates=["date"]).set_index("date")
+    df = pd.read_csv(data_cfg["csv_path"], parse_dates=["date"], dayfirst=True).set_index("date")
     df = df.rename(columns=str.lower)
+    df = df.sort_index()
+    start_ts, end_ts = df.index.min(), df.index.max()
+    midpoint = start_ts + (end_ts - start_ts) / 2
+    df = df.loc[:midpoint]
+    if df.empty:
+        raise RuntimeError("Pretraining split produced no data; check CSV range.")
+    logger.info("Offline pretrain window: %s → %s", df.index.min(), df.index.max())
     feats = build_features(df)
     norm = RollingZScore(window=500).fit(feats)
     feats_n = norm.transform(feats)

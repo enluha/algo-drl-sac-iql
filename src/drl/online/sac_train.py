@@ -50,7 +50,21 @@ def main():
     set_num_threads(rt_cfg.get("blas_threads",6))
     device = get_torch_device(None); log_device(logger)
 
-    df = pd.read_csv(data_cfg["csv_path"], parse_dates=["date"]).set_index("date").rename(columns=str.lower)
+    df = pd.read_csv(
+        data_cfg["csv_path"],
+        parse_dates=["date"],
+        dayfirst=True,
+    ).set_index("date").rename(columns=str.lower)
+    df = df.sort_index()
+    start_ts, end_ts = df.index.min(), df.index.max()
+    midpoint = start_ts + (end_ts - start_ts) / 2
+    eval_start = pd.Timestamp("2025-05-06 00:00:00")
+    train_mask = (df.index >= midpoint) & (df.index < eval_start)
+    df = df.loc[train_mask]
+    if df.empty:
+        raise RuntimeError("Online training split produced no data; check configured splits.")
+    logger.info("Online fine-tune window: %s → %s", df.index.min(), df.index.max())
+
     feats = build_features(df)
     norm = RollingZScore.load(Path("evaluation/artifacts/normalizer.pkl"))
     feats_n = norm.transform(feats)
@@ -118,9 +132,9 @@ def main():
 
     env.reset()
 
-    steps = int(os.getenv("QA_STEPS", 100000))
+    steps = int(os.getenv("QA_STEPS", 33333))
     buffer_limit = int(algo_cfg.get("buffer_size", 200000))
-    cache_size = max(buffer_limit, len(df))
+    cache_size = min(buffer_limit, max(len(df), 10000))
     replay_buffer = ReplayBuffer(
         FIFOBuffer(buffer_limit),
         env=env,
@@ -142,6 +156,12 @@ def main():
 
     artifacts = Path("evaluation/artifacts"); artifacts.mkdir(parents=True, exist_ok=True)
     agent.save_model(str(artifacts / "sac_policy.d3"))
+    try:
+        import torch
+        torch.save(agent.impl.policy.state_dict(), artifacts / "sac_actor_state.pt")
+        logger.info("Saved SAC actor state to evaluation/artifacts/sac_actor_state.pt")
+    except Exception as err:
+        logger.warning("Could not export SAC actor state_dict: %s", err)
     logger.info("SAC online fine-tune done; model saved.")
 
 if __name__ == "__main__":

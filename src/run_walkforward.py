@@ -2,16 +2,18 @@ import argparse, os
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from d3rlpy.base import load_learnable
+from d3rlpy.algos import SAC, SACConfig
+from d3rlpy.preprocessing import MinMaxActionScaler
 from src.utils.io_utils import load_yaml, save_csv, save_json
 from src.utils.logging_utils import get_logger
-from src.utils.device import get_torch_device, log_device, set_num_threads
+from src.utils.device import get_torch_device, log_device, set_num_threads, resolve_compile_flag
 from src.features.engineering import build_features
 from src.features.normalizer import RollingZScore
 from src.envs.market_env import MarketEnv
 from src.evaluation.metrics import summarize
 from src.evaluation.plots import candlestick_html, equity_html
 from src.evaluation.reporter import build_text_report
+from src.drl.online.sac_train import _build_vector_factory, _resolve_q_func_factory
 
 def _load_config() -> dict:
     cfg_path = Path(os.getenv("CONFIG","config/config.yaml"))
@@ -47,15 +49,64 @@ def _build_slices(timestamps: pd.Index, wf_cfg: dict) -> list[dict]:
 
 def run():
     cfg = _load_config()
-    data_cfg, env_cfg, wf_cfg, rt_cfg = cfg["data"], cfg["env"], cfg["walkforward"], cfg["runtime"]
+    data_cfg, env_cfg, algo_cfg, wf_cfg, rt_cfg = (
+        cfg["data"],
+        cfg["env"],
+        cfg["algo_sac"],
+        cfg["walkforward"],
+        cfg["runtime"],
+    )
     logger = get_logger("walkforward", level=rt_cfg.get("log_level","INFO"))
     set_num_threads(rt_cfg.get("blas_threads",6))
     device = get_torch_device(None); log_device(logger)
 
-    df = pd.read_csv(data_cfg["csv_path"], parse_dates=["date"]).set_index("date").rename(columns=str.lower)
+    df = pd.read_csv(
+        data_cfg["csv_path"],
+        parse_dates=["date"],
+        dayfirst=True,
+    ).set_index("date").rename(columns=str.lower)
     feats_all = build_features(df)
 
-    agent = load_learnable("evaluation/artifacts/sac_policy.d3")
+    encoder_cfg = algo_cfg.get("encoder", {})
+    fallback_hidden = tuple(
+        int(x) for x in encoder_cfg.get("mlp_hidden", encoder_cfg.get("hidden_units", [256, 256]))
+    )
+    encoder = _build_vector_factory(encoder_cfg, fallback_hidden)
+    action_scaler = MinMaxActionScaler(minimum=-1.0, maximum=1.0)
+    alpha_lr = float(algo_cfg.get("alpha_learning_rate", algo_cfg.get("lr_alpha", algo_cfg["lr_actor"])))
+    init_temperature = float(algo_cfg.get("initial_temperature", 0.1))
+    target_entropy = float(algo_cfg.get("target_entropy", -1.0))
+    compile_requested = bool(algo_cfg.get("compile_graph", False))
+    compile_graph = resolve_compile_flag(compile_requested, device, logger)
+    if compile_requested and not compile_graph:
+        logger.warning("compile_graph requested but Triton is missing; running without torch.compile.")
+    config_sac = SACConfig(
+        batch_size=algo_cfg["batch_size"],
+        gamma=algo_cfg["gamma"],
+        action_scaler=action_scaler,
+        actor_learning_rate=algo_cfg["lr_actor"],
+        critic_learning_rate=algo_cfg["lr_critic"],
+        temp_learning_rate=alpha_lr,
+        actor_encoder_factory=encoder,
+        critic_encoder_factory=encoder,
+        q_func_factory=_resolve_q_func_factory(algo_cfg.get("q_func_factory", "mean")),
+        tau=algo_cfg["tau"],
+        initial_temperature=init_temperature,
+        compile_graph=compile_graph,
+    )
+    agent = SAC(config=config_sac, device=device.type, enable_ddp=False)
+    actor_sd_path = Path("evaluation/artifacts/sac_actor_state.pt")
+    try:
+        import torch
+        actor_state = torch.load(actor_sd_path, map_location="cpu")
+    except FileNotFoundError as err:
+        raise FileNotFoundError(
+            "Missing SAC actor weights. Expected evaluation/artifacts/sac_actor_state.pt. "
+            "Run SAC fine-tune before walk-forward evaluation."
+        ) from err
+    except Exception as err:
+        raise RuntimeError(f"Failed to load SAC actor state_dict: {err}") from err
+    weights_loaded = False
 
     folds = _build_slices(df.index, wf_cfg)
     if not folds:
@@ -80,6 +131,14 @@ def run():
         env = MarketEnv(window_prices[["open","high","low","close"]], feats_norm, env_cfg)
         obs, _ = env.reset()
         prev_weight = 0.0
+        if not weights_loaded:
+            agent.build_with_env(env)
+            if hasattr(agent.impl, "target_entropy"):
+                agent.impl.target_entropy = target_entropy
+            elif hasattr(agent.impl, "_target_entropy"):
+                agent.impl._target_entropy = target_entropy
+            agent.impl.policy.load_state_dict(actor_state, strict=False)
+            weights_loaded = True
         while True:
             action = agent.predict(obs[np.newaxis,...])[0]
             obs, reward, done, truncated, info = env.step(action)
@@ -131,9 +190,19 @@ def run():
 
     candlestick_html(ohlc.loc["2025-09-01":"2025-10-16"], signals_df, ch / f"candlestick_{symbol}_SepOct2025.html")
     equity_html(equity_df["equity"], {buy_hold.name: buy_hold}, ch / f"equity_{symbol}.html")
+    equity_html(equity_df["equity"], {buy_hold.name: buy_hold}, ch / "8.html")
 
     summary = summarize(ledger_all, equity_df["equity"])
     build_text_report(summary, rep / f"summary_report_{symbol}.txt", context={
+        "overview": f"SAC walk-forward | {symbol}",
+        "params": {
+            "train_days": wf_cfg["train_days"],
+            "valid_days": wf_cfg["valid_days"],
+            "test_days": wf_cfg["test_days"],
+            "step_days": wf_cfg["step_days"],
+        },
+    })
+    build_text_report(summary, rep / "summary_report.txt", context={
         "overview": f"SAC walk-forward | {symbol}",
         "params": {
             "train_days": wf_cfg["train_days"],

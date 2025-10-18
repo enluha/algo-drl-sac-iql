@@ -10,8 +10,20 @@ def candlestick_html(df_ohlc, signals, path_html):
     # overlay signals (green up, red down)
     sig = signals.reindex(df_ohlc.index).fillna(0)
     buys = df_ohlc.index[sig.values>0]; sells = df_ohlc.index[sig.values<0]
-    fig.add_scatter(x=buys, y=df_ohlc["close"].reindex(buys), mode="markers", name="Long", marker_symbol="triangle-up")
-    fig.add_scatter(x=sells,y=df_ohlc["close"].reindex(sells),mode="markers", name="Short", marker_symbol="triangle-down")
+    fig.add_scatter(
+        x=buys,
+        y=df_ohlc["close"].reindex(buys),
+        mode="markers",
+        name="Long",
+        marker=dict(symbol="triangle-up", size=14, color="#16a34a", line=dict(width=0)),
+    )
+    fig.add_scatter(
+        x=sells,
+        y=df_ohlc["close"].reindex(sells),
+        mode="markers",
+        name="Short",
+        marker=dict(symbol="triangle-down", size=14, color="#dc2626", line=dict(width=0)),
+    )
     save_html(fig, path_html)
 
 def equity_html(equity, benchmarks: dict, path_html):
