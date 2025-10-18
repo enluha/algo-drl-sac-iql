@@ -2,6 +2,8 @@ import numpy as np, pandas as pd
 from d3rlpy.dataset import MDPDataset
 
 def build_offline_dataset(prices: pd.DataFrame, feats: pd.DataFrame, cfg: dict) -> MDPDataset:
+    assert prices.index.min() >= feats.index.min() and prices.index.max() <= feats.index.max(), \
+        "prices must lie within the feature index range"
     W = int(cfg["window_bars"]); ma = prices["close"].rolling(96, min_periods=96).mean()
     allow_long, allow_short = (prices["close"] > ma).fillna(False), (prices["close"] < ma).fillna(False)
 

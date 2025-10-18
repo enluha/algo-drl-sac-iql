@@ -1,4 +1,14 @@
-train_days: 270
-valid_days: 60
-test_days: 30
-step_days: 30
+splits:
+  pretrain:
+    start: "2024-06-10"
+    end:   "2025-01-31"
+  finetune:
+    start: "2025-02-01"
+    end:   "2025-04-30"
+  test:
+    start: "2025-05-01"
+    end:   "2025-10-03"
+
+# number of historical bars allowed before test start to warm up the observation window
+warmup_bars: 96
+

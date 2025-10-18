@@ -43,9 +43,13 @@ class MarketEnv(gym.Env):
         super().reset(seed=seed)
         self.t = self.W + self.latency
         self._w_prev = 0.0
-        self._equity, self._peak = 1.0, 1.0
+        self._equity = 1.0  # MUST start at 1.0
+        self._peak = 1.0
         self._ret_last = self._cost_last = self._net_last = 0.0
-        return self._obs(), {}
+        obs = self._obs()
+        # Guard: never start above 1.0
+        assert abs(self._equity - 1.0) < 1e-9, f"equity initialized to {self._equity}, expected 1.0"
+        return obs, {}
 
     def step(self, action: np.ndarray):
         # desired position for the NEXT bar
@@ -55,31 +59,34 @@ class MarketEnv(gym.Env):
         if abs(a - self._w_prev) < self.min_step: a = self._w_prev
         a = float(np.clip(a, -self.leverage, +self.leverage))
 
-        # execute previous weight on current bar
         ret_t = float(np.log(self.prices["close"].iloc[self.t] / self.prices["close"].iloc[self.t-1]))
-        raw = self._w_prev * ret_t
         turn = abs(a - self._w_prev)
-        cost = self.bps * turn
-        eq = float(self._equity * (1.0 + raw - cost * self.kappa_cost))
-        if not np.isfinite([raw, cost, eq]).all():
-            raw = 0.0
-            cost = 0.0
-            eq = max(1e-9, float(self._equity))
-        self._peak = max(self._peak, eq)
-        ddplus = max(0.0, (self._peak - eq) / max(self._peak, 1e-9))
-        reward = raw - cost * self.kappa_cost - self.lambda_risk * ddplus
-        if not np.isfinite(reward):
-            reward = 0.0
+        cost = self.bps * turn  # full cost (slippage + commission) in P&L units
+        raw = self._w_prev * ret_t
+        eq_next = self._equity * (1.0 + raw - cost)
+
+        ddplus = 0.0
+        if eq_next <= self._peak:
+            ddplus = (self._peak - eq_next) / (self._peak + 1e-12)
+        else:
+            self._peak = eq_next
+
+        reward = raw - self.kappa_cost * cost - self.lambda_risk * ddplus
+
+        if not np.isfinite([raw, cost, reward, eq_next]).all():
+            raw = cost = reward = 0.0
+            eq_next = max(1e-9, float(self._equity))
 
         # advance time & state
-        self._equity = eq
+        self._equity = float(eq_next)
         self._w_prev = a
         self._ret_last, self._cost_last, self._net_last = raw, cost, reward
         self.t += 1
         done = (self.t >= len(self.prices))
         return self._obs(), reward, done, False, {
             "raw_ret": raw, "cost": cost, "net_ret": reward,
-            "weight": a, "equity": eq, "drawdown": ddplus,
+            "weight": a, "turnover": turn,
+            "equity": self._equity, "drawdown": ddplus,
             "price": float(self.prices["close"].iloc[self.t-1]),
             "timestamp": self.prices.index[self.t-1]
         }

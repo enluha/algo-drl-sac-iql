@@ -11,6 +11,7 @@ from src.utils.device import get_torch_device, log_device, set_num_threads, reso
 from src.features.engineering import build_features
 from src.features.normalizer import RollingZScore
 from src.envs.dataset_builder import build_offline_dataset
+from src.utils.splits import load_splits
 
 def _load_config() -> dict:
     cfg_path = Path(os.getenv("CONFIG","config/config.yaml"))
@@ -37,24 +38,29 @@ def main():
     set_num_threads(rt_cfg.get("blas_threads",6))
     device = get_torch_device(None); log_device(logger)
 
-    df = pd.read_csv(data_cfg["csv_path"], parse_dates=["date"], dayfirst=True).set_index("date")
-    df = df.rename(columns=str.lower)
-    df = df.sort_index()
-    start_ts, end_ts = df.index.min(), df.index.max()
-    midpoint = start_ts + (end_ts - start_ts) / 2
-    df = df.loc[:midpoint]
-    if df.empty:
-        raise RuntimeError("Pretraining split produced no data; check CSV range.")
-    logger.info("Offline pretrain window: %s → %s", df.index.min(), df.index.max())
-    feats = build_features(df)
+    df = pd.read_csv(
+        data_cfg["csv_path"],
+        parse_dates=["date"],
+        dayfirst=True,
+    ).set_index("date").rename(columns=str.lower).sort_index()
+    splits = load_splits(cfg, df.index, data_cfg.get("bar"))
+    pre = splits.pretrain
+
+    df_pre = df.loc[pre.start:pre.end]
+    if df_pre.empty:
+        raise RuntimeError("Pretraining split produced no rows; check walkforward splits.")
+    logger.info("Offline pretrain window: %s → %s", df_pre.index.min(), df_pre.index.max())
+
+    feats = build_features(df_pre)
     norm = RollingZScore(window=500).fit(feats)
     feats_n = norm.transform(feats)
     arr = feats_n.to_numpy()
     if not np.isfinite(arr).all():
         bad = arr.size - np.isfinite(arr).sum()
         raise RuntimeError(f"Non-finite features after normalization: {bad} cells")
+    assert df_pre.index.max() <= pre.end, "Pretrain slice exceeded pretrain end."
 
-    dset = build_offline_dataset(df[["open","high","low","close"]], feats_n, env_cfg)
+    dset = build_offline_dataset(df_pre[["open","high","low","close"]], feats_n, env_cfg)
     encoder_cfg = algo_cfg.get("encoder", {})
     fallback_hidden = encoder_cfg.get(
         "mlp_hidden", encoder_cfg.get("hidden_units", [256, 256])
@@ -112,7 +118,7 @@ def main():
         bc.fit(dset, n_steps=int(os.getenv("QA_STEPS", 300000)), save_interval=int(1e9))
         bc.save_model(str(out / "iql_policy.d3"))
         logger.info("BC pretrain saved; continuing.")
-    norm.save(out / "normalizer.pkl")
+    norm.save(out / "pretrain_normalizer.pkl")
     logger.info("Offline IQL pretrain complete; artifacts saved.")
 
 if __name__ == "__main__":

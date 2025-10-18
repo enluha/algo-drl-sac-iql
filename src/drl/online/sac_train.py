@@ -54,26 +54,28 @@ def main():
         data_cfg["csv_path"],
         parse_dates=["date"],
         dayfirst=True,
-    ).set_index("date").rename(columns=str.lower)
-    df = df.sort_index()
-    start_ts, end_ts = df.index.min(), df.index.max()
-    midpoint = start_ts + (end_ts - start_ts) / 2
-    eval_start = pd.Timestamp("2025-05-06 00:00:00")
-    train_mask = (df.index >= midpoint) & (df.index < eval_start)
-    df = df.loc[train_mask]
-    if df.empty:
-        raise RuntimeError("Online training split produced no data; check configured splits.")
-    logger.info("Online fine-tune window: %s → %s", df.index.min(), df.index.max())
+    ).set_index("date").rename(columns=str.lower).sort_index()
+    splits = load_splits(cfg, df.index, data_cfg.get("bar"))
+    fin = splits.finetune
 
-    feats = build_features(df)
-    norm = RollingZScore.load(Path("evaluation/artifacts/normalizer.pkl"))
-    feats_n = norm.transform(feats)
-    arr = feats_n.to_numpy(dtype=np.float32)
+    df_ft = df.loc[fin.start:fin.end]
+    if df_ft.empty:
+        raise RuntimeError("Finetune split produced no data; check walkforward splits.")
+    assert df_ft.index.min() >= fin.start and df_ft.index.max() <= fin.end
+    logger.info("Online fine-tune window: %s → %s", df_ft.index.min(), df_ft.index.max())
+
+    feats_ft = build_features(df_ft)
+    norm_ft = RollingZScore(window=500, clip=5.0).fit(feats_ft)
+    feats_ft_n = norm_ft.transform(feats_ft)
+    arr = feats_ft_n.to_numpy(dtype=np.float32)
     if not np.isfinite(arr).all():
         bad = int(arr.size - np.isfinite(arr).sum())
         raise RuntimeError(f"Non-finite features after normalization: {bad} cells")
 
-    env = MarketEnv(df[["open","high","low","close"]], feats_n, env_cfg)
+    artifacts = Path("evaluation/artifacts"); artifacts.mkdir(parents=True, exist_ok=True)
+    norm_ft.save(str(artifacts / "finetune_normalizer.pkl"))
+
+    env = MarketEnv(df_ft[["open","high","low","close"]], feats_ft_n, env_cfg)
 
     encoder_cfg = algo_cfg.get("encoder", {})
     fallback_hidden = tuple(
@@ -134,7 +136,7 @@ def main():
 
     steps = int(os.getenv("QA_STEPS", 33333))
     buffer_limit = int(algo_cfg.get("buffer_size", 200000))
-    cache_size = min(buffer_limit, max(len(df), 10000))
+    cache_size = min(buffer_limit, max(len(df_ft), 10000))
     replay_buffer = ReplayBuffer(
         FIFOBuffer(buffer_limit),
         env=env,
@@ -154,7 +156,6 @@ def main():
         show_progress=False,
     )
 
-    artifacts = Path("evaluation/artifacts"); artifacts.mkdir(parents=True, exist_ok=True)
     agent.save_model(str(artifacts / "sac_policy.d3"))
     try:
         import torch

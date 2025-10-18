@@ -50,6 +50,19 @@ echo "=== Downloading OHLCV: $SYMBOL ${INTERVAL_SEC}s $START -> $END ==="
 
 CSV_PATH="$(ls -1 data/${SYMBOL}${INTERVAL_SEC}_*.csv | tail -n1)"
 echo "Saved candles to $CSV_PATH"
+echo "=== Active splits (from config/walkforward.yaml) ==="
+"$PYTHON_BIN" - <<'PY'
+import yaml
+with open("config/walkforward.yaml","r", encoding="utf-8") as fh:
+    cfg = yaml.safe_load(fh)
+splits = cfg.get("splits")
+if splits is None:
+    print("No splits found in config/walkforward.yaml")
+else:
+    for name, span in splits.items():
+        print(f"{name}: {span}")
+print("warmup_bars:", cfg.get("warmup_bars"))
+PY
 
 # --- 2) patch config/data.yaml: csv_path ---
 echo "=== Updating config/data.yaml with csv_path ==="
