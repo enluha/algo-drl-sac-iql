@@ -85,6 +85,14 @@ def main():
     try:
         agent.fit(dset, n_steps=steps, save_interval=int(1e9))
         agent.save_model(str(out / "iql_policy.d3"))
+        # --- save both d3rlpy artifact (for inspection) and raw actor state_dict (for warm-start) ---
+        try:
+            import torch
+            actor_sd = agent.impl.policy.state_dict()
+            torch.save(actor_sd, out / "iql_actor_state.pt")
+            logger.info("Saved IQL actor state to evaluation/artifacts/iql_actor_state.pt")
+        except Exception as e:
+            logger.warning("Could not export IQL actor state_dict: %s", e)
     except Exception as err:
         logger.exception("IQL fit failed; falling back to Behavior Cloning pretrain.")
         bc_cfg = BCConfig(

@@ -1,10 +1,11 @@
 import os, logging
 from pathlib import Path
+import numpy as np
 import pandas as pd
 from d3rlpy.algos import SAC, SACConfig
 from d3rlpy.models.encoders import VectorEncoderFactory
 from d3rlpy.models.q_functions import MeanQFunctionFactory
-from d3rlpy.base import load_learnable
+from d3rlpy.preprocessing import MinMaxActionScaler
 from d3rlpy.dataset import ReplayBuffer
 from d3rlpy.dataset.buffers import FIFOBuffer
 from src.utils.io_utils import load_yaml
@@ -13,7 +14,6 @@ from src.utils.device import get_torch_device, log_device, set_num_threads, reso
 from src.features.engineering import build_features
 from src.features.normalizer import RollingZScore
 from src.envs.market_env import MarketEnv
-from src.drl.online.weight_bridge import load_iql_actor_to_sac
 
 
 def _build_vector_factory(cfg: dict | None, fallback: tuple[int, ...]) -> VectorEncoderFactory:
@@ -54,6 +54,10 @@ def main():
     feats = build_features(df)
     norm = RollingZScore.load(Path("evaluation/artifacts/normalizer.pkl"))
     feats_n = norm.transform(feats)
+    arr = feats_n.to_numpy(dtype=np.float32)
+    if not np.isfinite(arr).all():
+        bad = int(arr.size - np.isfinite(arr).sum())
+        raise RuntimeError(f"Non-finite features after normalization: {bad} cells")
 
     env = MarketEnv(df[["open","high","low","close"]], feats_n, env_cfg)
 
@@ -66,27 +70,53 @@ def main():
     compile_graph = resolve_compile_flag(compile_requested, device, logger)
     if compile_requested and not compile_graph:
         logger.warning("compile_graph requested but Triton is missing; running without torch.compile.")
+    action_scaler = MinMaxActionScaler(minimum=-1.0, maximum=1.0)
+    alpha_lr = float(algo_cfg.get("alpha_learning_rate", algo_cfg.get("lr_alpha", algo_cfg["lr_actor"])))
+    init_temperature = float(algo_cfg.get("initial_temperature", 0.1))
+    target_entropy = float(algo_cfg.get("target_entropy", -1.0))
     config_sac = SACConfig(
         batch_size=algo_cfg["batch_size"],
         gamma=algo_cfg["gamma"],
+        action_scaler=action_scaler,
         actor_learning_rate=algo_cfg["lr_actor"],
         critic_learning_rate=algo_cfg["lr_critic"],
-        temp_learning_rate=algo_cfg.get("lr_alpha", algo_cfg["lr_actor"]),
+        temp_learning_rate=alpha_lr,
         actor_encoder_factory=encoder,
         critic_encoder_factory=encoder,
         q_func_factory=_resolve_q_func_factory(algo_cfg.get("q_func_factory", "mean")),
         tau=algo_cfg["tau"],
-        initial_temperature=float(abs(algo_cfg.get("target_entropy", 1.0))),
+        initial_temperature=init_temperature,
         compile_graph=compile_graph,
     )
     agent = SAC(config=config_sac, device=device.type, enable_ddp=False)
     agent.build_with_env(env)
-    # warm start from IQL
-    try:
-        iql = load_learnable("evaluation/artifacts/iql_policy.d3")
-        load_iql_actor_to_sac(iql, agent, logger)
-    except Exception as e:
-        logger.warning(f"Could not warm-start from IQL: {e}")
+    if hasattr(agent.impl, "target_entropy"):
+        agent.impl.target_entropy = target_entropy
+    elif hasattr(agent.impl, "_target_entropy"):
+        agent.impl._target_entropy = target_entropy
+
+    # Warm-start SAC actor from IQL actor if present (raw state_dict)
+    actor_sd_path = Path("evaluation/artifacts/iql_actor_state.pt")
+    if actor_sd_path.exists():
+        try:
+            import torch
+            state_dict = torch.load(actor_sd_path, map_location="cpu")
+            agent.impl.policy.load_state_dict(state_dict, strict=False)
+            logger.info("Warm-started SAC actor from IQL actor_state.pt")
+            try:
+                obs_preview, _ = env.reset()
+                if not np.isfinite(obs_preview).all():
+                    obs_preview = np.nan_to_num(obs_preview, nan=0.0, posinf=0.0, neginf=0.0)
+                sample_action = agent.predict(obs_preview.reshape(1, -1))[0]
+                logger.debug("Sample action post warm-start: %.4f", float(sample_action))
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning("Warm-start failed (actor_state.pt): %s", e)
+    else:
+        logger.warning("No iql_actor_state.pt found; SAC starts from scratch.")
+
+    env.reset()
 
     steps = int(os.getenv("QA_STEPS", 100000))
     buffer_limit = int(algo_cfg.get("buffer_size", 200000))

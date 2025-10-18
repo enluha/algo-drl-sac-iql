@@ -2,12 +2,14 @@ gamma: 0.99
 tau: 0.005
 lr_actor: 0.0003
 lr_critic: 0.0003
-batch_size: 512
-buffer_size: 2000000
+alpha_learning_rate: 0.0003
+initial_temperature: 0.1
 target_entropy: -1.0
-updates_per_step: 1
+batch_size: 256
+buffer_size: 2000000
+updates_per_step: 4
 encoder:
   type: vector
   hidden_units: [256, 256]
 device: "cuda"
-n_envs: 8
+n_envs: 1
