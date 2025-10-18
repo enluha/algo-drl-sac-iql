@@ -152,7 +152,7 @@ def save_csv(rows: List[List], path: Path) -> None:
         writer = csv.writer(f)
         writer.writerow(header)
         for row in rows:
-            open_time = dt.datetime.utcfromtimestamp(row[0] / 1000)
+            open_time = dt.datetime.fromtimestamp(row[0] / 1000, tz=dt.timezone.utc)
             writer.writerow(
                 [open_time.strftime(DATE_OUTPUT_FMT), row[4], row[1], row[2], row[3]]
             )

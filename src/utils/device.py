@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, torch, logging
+import os, torch, logging, importlib.util
 
 def get_torch_device(prefer: str | None = None) -> torch.device:
     forced = os.getenv("QA_DEVICE", None)
@@ -27,3 +27,22 @@ def log_device(logger: logging.Logger) -> None:
         props = torch.cuda.get_device_properties(0)
         msg += f" | {props.name} cc={props.major}.{props.minor} total_mem={props.total_memory/1e9:.1f}GB"
     logger.info(msg)
+
+def resolve_compile_flag(requested: bool, device: torch.device, logger: logging.Logger | None = None) -> bool:
+    if not requested:
+        return False
+    if device.type != "cuda":
+        if logger:
+            logger.debug("compile_graph requested but device=%s; disabling.", device.type)
+        return False
+    try:
+        spec = importlib.util.find_spec("triton")
+    except Exception as err:
+        if logger:
+            logger.warning("compile_graph requested but environment check failed (%s); disabling.", err)
+        return False
+    if spec is None:
+        if logger:
+            logger.warning("compile_graph requested but Triton is not installed; disabling for this run.")
+        return False
+    return True

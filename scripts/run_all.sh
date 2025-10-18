@@ -15,10 +15,25 @@ export NUMEXPR_NUM_THREADS="${BLAS_THREADS:-6}"
 
 echo "Using Python interpreter: $(which python)"
 echo -n "CUDA available? "
-python - <<'PY'
+CUDA_AVAILABLE=$(python - <<'PY'
 import torch
-print(torch.cuda.is_available())
+print("True" if torch.cuda.is_available() else "False")
 PY
+)
+CUDA_AVAILABLE=${CUDA_AVAILABLE//$'\r'/}
+echo "${CUDA_AVAILABLE}"
+echo "CUDA visible?: $(python - <<'PY'
+import torch
+print(torch.cuda.is_available(), 'torch_cuda', torch.version.cuda)
+PY
+)"
+
+if [[ "${DEVICE:-}" != "cpu" && "${QA_DEVICE:-}" != "cpu" && "${CUDA_AVAILABLE}" != "True" ]]; then
+  echo "CUDA not available; aborting run. Set DEVICE=cpu to override for CPU execution."
+  exit 1
+elif [[ "${DEVICE:-}" == "cpu" || "${QA_DEVICE:-}" == "cpu" ]]; then
+  echo "CPU override detected; proceeding without CUDA acceleration."
+fi
 
 # --- 1) download OHLCV to ./data ---
 echo "=== Downloading OHLCV: $SYMBOL ${INTERVAL_SEC}s $START -> $END ==="

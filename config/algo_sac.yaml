@@ -7,9 +7,7 @@ buffer_size: 2000000
 target_entropy: -1.0
 updates_per_step: 1
 encoder:
-  type: "tcn"
-  channels: [64, 128, 128]
-  kernel_size: 5
-  mlp_hidden: [256, 256]
+  type: vector
+  hidden_units: [256, 256]
 device: "cuda"
 n_envs: 8

@@ -1,18 +1,40 @@
 import os, logging
 from pathlib import Path
-import numpy as np
 import pandas as pd
 from d3rlpy.algos import SAC, SACConfig
 from d3rlpy.models.encoders import VectorEncoderFactory
-from d3rlpy.dataset import FIFOBuffer
+from d3rlpy.models.q_functions import MeanQFunctionFactory
 from d3rlpy.base import load_learnable
+from d3rlpy.dataset import ReplayBuffer
+from d3rlpy.dataset.buffers import FIFOBuffer
 from src.utils.io_utils import load_yaml
 from src.utils.logging_utils import get_logger
-from src.utils.device import get_torch_device, log_device, set_num_threads
+from src.utils.device import get_torch_device, log_device, set_num_threads, resolve_compile_flag
 from src.features.engineering import build_features
 from src.features.normalizer import RollingZScore
 from src.envs.market_env import MarketEnv
 from src.drl.online.weight_bridge import load_iql_actor_to_sac
+
+
+def _build_vector_factory(cfg: dict | None, fallback: tuple[int, ...]) -> VectorEncoderFactory:
+    params_source: dict = {}
+    if isinstance(cfg, dict):
+        params_source = cfg.get("params") if "params" in cfg else cfg
+    params = dict(params_source)
+    params.pop("type", None)
+    hidden = params.pop("hidden_units", None) or params.pop("mlp_hidden", None) or fallback
+    hidden_units = tuple(int(x) for x in hidden)
+    return VectorEncoderFactory(hidden_units=hidden_units, **params)
+
+
+def _resolve_q_func_factory(value) -> MeanQFunctionFactory:
+    if isinstance(value, dict):
+        factory_type = value.get("type", "mean").lower()
+    else:
+        factory_type = str(value or "mean").lower()
+    if factory_type != "mean":
+        raise ValueError(f"Unsupported q_func_factory '{factory_type}' for quick run.")
+    return MeanQFunctionFactory()
 
 def _load_config() -> dict:
     cfg_path = Path(os.getenv("CONFIG","config/config.yaml"))
@@ -35,8 +57,15 @@ def main():
 
     env = MarketEnv(df[["open","high","low","close"]], feats_n, env_cfg)
 
-    hidden = tuple(algo_cfg["encoder"]["mlp_hidden"])
-    encoder = VectorEncoderFactory(hidden_units=hidden)
+    encoder_cfg = algo_cfg.get("encoder", {})
+    fallback_hidden = tuple(
+        int(x) for x in encoder_cfg.get("mlp_hidden", encoder_cfg.get("hidden_units", [256, 256]))
+    )
+    encoder = _build_vector_factory(encoder_cfg, fallback_hidden)
+    compile_requested = bool(algo_cfg.get("compile_graph", False))
+    compile_graph = resolve_compile_flag(compile_requested, device, logger)
+    if compile_requested and not compile_graph:
+        logger.warning("compile_graph requested but Triton is missing; running without torch.compile.")
     config_sac = SACConfig(
         batch_size=algo_cfg["batch_size"],
         gamma=algo_cfg["gamma"],
@@ -45,11 +74,13 @@ def main():
         temp_learning_rate=algo_cfg.get("lr_alpha", algo_cfg["lr_actor"]),
         actor_encoder_factory=encoder,
         critic_encoder_factory=encoder,
-        q_func_factory="mean",
+        q_func_factory=_resolve_q_func_factory(algo_cfg.get("q_func_factory", "mean")),
         tau=algo_cfg["tau"],
         initial_temperature=float(abs(algo_cfg.get("target_entropy", 1.0))),
+        compile_graph=compile_graph,
     )
     agent = SAC(config=config_sac, device=device.type, enable_ddp=False)
+    agent.build_with_env(env)
     # warm start from IQL
     try:
         iql = load_learnable("evaluation/artifacts/iql_policy.d3")
@@ -57,21 +88,27 @@ def main():
     except Exception as e:
         logger.warning(f"Could not warm-start from IQL: {e}")
 
-    buf = FIFOBuffer(algo_cfg["buffer_size"])
-    obs, _ = env.reset()
-    obs = obs.astype(np.float32)
     steps = int(os.getenv("QA_STEPS", 100000))
-    for _ in range(steps):
-        obs_batch = obs.astype(np.float32)
-        action = agent.predict(obs_batch[np.newaxis,...])[0].astype(np.float32)
-        nobs, reward, terminated, truncated, info = env.step(action)
-        buf.append(obs_batch, action, np.float32(reward), bool(terminated))
-        obs = nobs.astype(np.float32)
-        if len(buf) >= agent.batch_size:
-            agent.update(buf, n_steps=1)
-        if terminated or truncated:
-            obs, _ = env.reset()
-            obs = obs.astype(np.float32)
+    buffer_limit = int(algo_cfg.get("buffer_size", 200000))
+    cache_size = max(buffer_limit, len(df))
+    replay_buffer = ReplayBuffer(
+        FIFOBuffer(buffer_limit),
+        env=env,
+        cache_size=cache_size,
+        write_at_termination=True,
+    )
+
+    agent.fit_online(
+        env,
+        buffer=replay_buffer,
+        n_steps=steps,
+        n_steps_per_epoch=max(steps, 1),
+        n_updates=int(algo_cfg.get("updates_per_step", 1)),
+        update_interval=1,
+        save_interval=int(1e9),
+        logging_steps=max(steps // 5, 1),
+        show_progress=False,
+    )
 
     artifacts = Path("evaluation/artifacts"); artifacts.mkdir(parents=True, exist_ok=True)
     agent.save_model(str(artifacts / "sac_policy.d3"))
