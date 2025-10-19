@@ -2,3 +2,7 @@ seed: 42
 blas_threads: 6
 n_workers: 1
 log_level: INFO
+normalizer: global
+rolling_window: 500
+normalizer_clip: 5.0
+

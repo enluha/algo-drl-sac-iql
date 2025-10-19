@@ -6,8 +6,20 @@ alpha_learning_rate: 0.0003
 initial_temperature: 0.1
 target_entropy: -1.0
 batch_size: 256
-buffer_size: 2000000
+buffer_size: 10000 # Increase it once algo stability is confirmed e.g. 200000
 updates_per_step: 4
+actor_optim_factory:
+  type: adam
+  params:
+    clip_grad_norm: 1.0
+critic_optim_factory:
+  type: adam
+  params:
+    clip_grad_norm: 1.0
+alpha_optim_factory:
+  type: adam
+  params:
+    clip_grad_norm: 1.0
 encoder:
   type: vector
   hidden_units: [256, 256]

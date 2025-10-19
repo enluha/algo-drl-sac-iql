@@ -20,6 +20,7 @@ class MarketEnv(gym.Env):
         rw = cfg.get("reward", {})
         self.kappa_cost = float(rw.get("kappa_cost", 0.0))
         self.lambda_risk = float(rw.get("lambda_risk", 0.0))
+        self.risk_metric = str(rw.get("risk_metric", "drawdown")).lower()
 
         self.t = 0
         self._w_prev = 0.0
@@ -65,17 +66,25 @@ class MarketEnv(gym.Env):
         raw = self._w_prev * ret_t
         eq_next = self._equity * (1.0 + raw - cost)
 
-        ddplus = 0.0
-        if eq_next <= self._peak:
-            ddplus = (self._peak - eq_next) / (self._peak + 1e-12)
-        else:
+        prev_dd = max(0.0, (self._peak - self._equity) / (self._peak + 1e-12))
+        if eq_next >= self._peak:
+            new_dd = 0.0
             self._peak = eq_next
+        else:
+            new_dd = (self._peak - eq_next) / (self._peak + 1e-12)
 
-        reward = raw - self.kappa_cost * cost - self.lambda_risk * ddplus
+        if self.risk_metric == "dd_velocity":
+            risk_pen = max(0.0, new_dd - prev_dd)
+        else:
+            risk_pen = new_dd
+
+        reward = raw - self.kappa_cost * cost - self.lambda_risk * risk_pen
 
         if not np.isfinite([raw, cost, reward, eq_next]).all():
             raw = cost = reward = 0.0
             eq_next = max(1e-9, float(self._equity))
+            new_dd = prev_dd = 0.0
+            risk_pen = 0.0
 
         # advance time & state
         self._equity = float(eq_next)
@@ -86,7 +95,7 @@ class MarketEnv(gym.Env):
         return self._obs(), reward, done, False, {
             "raw_ret": raw, "cost": cost, "net_ret": reward,
             "weight": a, "turnover": turn,
-            "equity": self._equity, "drawdown": ddplus,
+            "equity": self._equity, "drawdown": new_dd, "dd_velocity": max(0.0, new_dd - prev_dd),
             "price": float(self.prices["close"].iloc[self.t-1]),
             "timestamp": self.prices.index[self.t-1]
         }

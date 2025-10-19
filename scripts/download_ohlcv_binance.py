@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-MVP - READY: Download OHLCV samples from Binance and save to CSV.
+Download OHLCV + Volume data from Binance and save to CSV.
 
 Usage:
     python scripts/download_ohlcv_binance.py --symbol BTCUSDT --interval 3600 \
         --start "2024-06-10" --end "2025-10-12" --output-dir data/
 
 Notes:
-- Produces columns: date, close, open, high, low (UTC timestamps).
-- Extend header to include volume/quote_volume/trades if needed later (NON MVP).
+- Produces columns: date, close, open, high, low, volume, taker_buy_volume (UTC timestamps).
+- Volume is base asset volume (e.g., BTC for BTCUSDT pair).
+- Taker buy volume represents aggressive buy orders (market buys, indicates buying pressure).
 """
 
 from __future__ import annotations
@@ -141,20 +142,22 @@ def format_filename(symbol: str, interval_seconds: int, start: dt.datetime, end:
 
 
 def save_csv(rows: List[List], path: Path) -> None:
-    """MVP - Save klines to CSV with columns: date, close, open, high, low (UTC).
+    """MVP - Save klines to CSV with columns: date, close, open, high, low, volume, taker_buy_volume (UTC).
 
     Params:
         rows: list of kline rows returned by Binance.
         path: destination path for CSV.
     """
-    header = ["date", "close", "open", "high", "low"]
+    header = ["date", "close", "open", "high", "low", "volume", "taker_buy_volume"]
     with path.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(header)
         for row in rows:
             open_time = dt.datetime.fromtimestamp(row[0] / 1000, tz=dt.timezone.utc)
+            volume_base = row[5]  # base asset volume
+            taker_buy_base = row[9]  # taker buy base asset volume
             writer.writerow(
-                [open_time.strftime(DATE_OUTPUT_FMT), row[4], row[1], row[2], row[3]]
+                [open_time.strftime(DATE_OUTPUT_FMT), row[4], row[1], row[2], row[3], volume_base, taker_buy_base]
             )
 
 

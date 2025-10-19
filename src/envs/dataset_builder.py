@@ -4,8 +4,17 @@ from d3rlpy.dataset import MDPDataset
 def build_offline_dataset(prices: pd.DataFrame, feats: pd.DataFrame, cfg: dict) -> MDPDataset:
     assert prices.index.min() >= feats.index.min() and prices.index.max() <= feats.index.max(), \
         "prices must lie within the feature index range"
-    W = int(cfg["window_bars"]); ma = prices["close"].rolling(96, min_periods=96).mean()
-    allow_long, allow_short = (prices["close"] > ma).fillna(False), (prices["close"] < ma).fillna(False)
+    W = int(cfg["window_bars"])
+
+    # --- sizing helpers (EWMA vol on 1-bar log returns) ---
+    ret1 = np.log(prices["close"]).diff()
+    sigma = ret1.ewm(span=48, adjust=False).std().fillna(method="bfill")
+    target_vol = 0.02
+    base_size = (target_vol / (sigma + 1e-6)).clip(0.0, 1.0)
+
+    ma96 = prices["close"].rolling(96, min_periods=96).mean()
+    allow_long = (prices["close"] > ma96).fillna(False)
+    allow_short = (prices["close"] < ma96).fillna(False)
 
     obs, act, rew, done = [], [], [], []
     w_prev, eq, peak = 0.0, 1.0, 1.0
@@ -21,16 +30,19 @@ def build_offline_dataset(prices: pd.DataFrame, feats: pd.DataFrame, cfg: dict) 
         if not np.isfinite(window).all():
             continue
 
-        mom = (prices["close"].iloc[t] / prices["close"].iloc[t-24] - 1.0) if t>=24 else 0.0
+        mom24 = (prices["close"].iloc[t] / prices["close"].iloc[t-24] - 1.0) if t >= 24 else 0.0
+        sz = float(base_size.iloc[t]) if not np.isnan(base_size.iloc[t]) else 0.0
         a = 0.0
-        if mom>0 and allow_long.iloc[t]: a = 0.5
-        if mom<0 and allow_short.iloc[t]: a = -0.5
+        if mom24 > 0 and allow_long.iloc[t]:
+            a = +0.5 * sz
+        elif mom24 < 0 and allow_short.iloc[t]:
+            a = -0.5 * sz
         a = float(np.clip(a, -1.0, 1.0))
 
         ret = float(np.log(prices["close"].iloc[t] / prices["close"].iloc[t-1]))
         raw = w_prev * ret
         cost = bps * abs(a - w_prev)
-        eq = eq * (1 + raw - kappa*cost)
+        eq = eq * (1 + raw - cost)
         peak = max(peak, eq); ddplus = max(0.0, (peak-eq)/peak)
         r = raw - kappa*cost - lam*ddplus
         if not np.isfinite(r):

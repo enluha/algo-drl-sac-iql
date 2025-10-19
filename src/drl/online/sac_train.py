@@ -12,8 +12,9 @@ from src.utils.io_utils import load_yaml
 from src.utils.logging_utils import get_logger
 from src.utils.device import get_torch_device, log_device, set_num_threads, resolve_compile_flag
 from src.features.engineering import build_features
-from src.features.normalizer import RollingZScore
+from src.features.normalizer import RollingZScore, GlobalZScore
 from src.envs.market_env import MarketEnv
+from src.utils.splits import load_splits
 
 
 def _build_vector_factory(cfg: dict | None, fallback: tuple[int, ...]) -> VectorEncoderFactory:
@@ -62,10 +63,18 @@ def main():
     if df_ft.empty:
         raise RuntimeError("Finetune split produced no data; check walkforward splits.")
     assert df_ft.index.min() >= fin.start and df_ft.index.max() <= fin.end
-    logger.info("Online fine-tune window: %s → %s", df_ft.index.min(), df_ft.index.max())
+    logger.info("Online fine-tune window: %s -> %s", df_ft.index.min(), df_ft.index.max())
 
     feats_ft = build_features(df_ft)
-    norm_ft = RollingZScore(window=500, clip=5.0).fit(feats_ft)
+    normalizer_mode = str(rt_cfg.get("normalizer", "global")).lower()
+    clip = float(rt_cfg.get("normalizer_clip", 5.0))
+    window = int(rt_cfg.get("rolling_window", 500))
+    if normalizer_mode == "global":
+        norm_ft = GlobalZScore(clip=clip).fit(feats_ft)
+    elif normalizer_mode == "rolling":
+        norm_ft = RollingZScore(window=window, clip=clip).fit(feats_ft)
+    else:
+        raise ValueError(f"Unsupported normalizer mode '{normalizer_mode}'")
     feats_ft_n = norm_ft.transform(feats_ft)
     arr = feats_ft_n.to_numpy(dtype=np.float32)
     if not np.isfinite(arr).all():
@@ -144,6 +153,9 @@ def main():
         write_at_termination=True,
     )
 
+    logger.info(
+        "Starting SAC online fine-tune for %s environment steps (show_progress enabled).", steps
+    )
     agent.fit_online(
         env,
         buffer=replay_buffer,
@@ -153,7 +165,7 @@ def main():
         update_interval=1,
         save_interval=int(1e9),
         logging_steps=max(steps // 5, 1),
-        show_progress=False,
+        show_progress=True,
     )
 
     agent.save_model(str(artifacts / "sac_policy.d3"))

@@ -14,4 +14,16 @@ critic_encoder_factory:
 value_encoder_factory:
   type: vector
   params: { hidden_units: [256, 256] }
+actor_optim_factory:
+  type: adam
+  params:
+    clip_grad_norm: 1.0
+critic_optim_factory:
+  type: adam
+  params:
+    clip_grad_norm: 1.0
+value_optim_factory:
+  type: adam
+  params:
+    clip_grad_norm: 1.0
 device: "cuda"

@@ -16,7 +16,7 @@ def test_equity_starts_at_one_and_costs_full():
         "min_step": 0.0,
         "leverage_max": 1.0,
         "costs": {"slippage_bps": 5, "commission_bps": 10},
-        "reward": {"kappa_cost": 1.0, "lambda_risk": 0.0},
+        "reward": {"kappa_cost": 1.0, "lambda_risk": 0.0, "risk_metric": "drawdown" },
     }
     env = MarketEnv(ohlc, feats, cfg)
     _, _ = env.reset()

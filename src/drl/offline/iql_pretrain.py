@@ -9,7 +9,7 @@ from src.utils.io_utils import load_yaml
 from src.utils.logging_utils import get_logger
 from src.utils.device import get_torch_device, log_device, set_num_threads, resolve_compile_flag
 from src.features.engineering import build_features
-from src.features.normalizer import RollingZScore
+from src.features.normalizer import RollingZScore, GlobalZScore
 from src.envs.dataset_builder import build_offline_dataset
 from src.utils.splits import load_splits
 
@@ -52,7 +52,15 @@ def main():
     logger.info("Offline pretrain window: %s → %s", df_pre.index.min(), df_pre.index.max())
 
     feats = build_features(df_pre)
-    norm = RollingZScore(window=500).fit(feats)
+    normalizer_mode = str(rt_cfg.get("normalizer", "global")).lower()
+    clip = float(rt_cfg.get("normalizer_clip", 5.0))
+    window = int(rt_cfg.get("rolling_window", 500))
+    if normalizer_mode == "global":
+        norm = GlobalZScore(clip=clip).fit(feats)
+    elif normalizer_mode == "rolling":
+        norm = RollingZScore(window=window, clip=clip).fit(feats)
+    else:
+        raise ValueError(f"Unsupported normalizer mode '{normalizer_mode}'")
     feats_n = norm.transform(feats)
     arr = feats_n.to_numpy()
     if not np.isfinite(arr).all():
@@ -95,8 +103,9 @@ def main():
     agent = IQL(config=config_iql, device=device.type, enable_ddp=False)
     out = Path("evaluation/artifacts"); out.mkdir(parents=True, exist_ok=True)
     steps = int(os.getenv("QA_STEPS", algo_cfg["grad_steps"]))
+    logger.info("Starting IQL offline pretrain for %s gradient steps (show_progress enabled).", steps)
     try:
-        agent.fit(dset, n_steps=steps, save_interval=int(1e9))
+        agent.fit(dset, n_steps=steps, save_interval=int(1e9), show_progress=True)
         agent.save_model(str(out / "iql_policy.d3"))
         # --- save both d3rlpy artifact (for inspection) and raw actor state_dict (for warm-start) ---
         try:
@@ -115,7 +124,9 @@ def main():
             compile_graph=compile_graph,
         )
         bc = BC(config=bc_cfg, device=device.type, enable_ddp=False)
-        bc.fit(dset, n_steps=int(os.getenv("QA_STEPS", 300000)), save_interval=int(1e9))
+        bc_steps = int(os.getenv("QA_STEPS", 300000))
+        logger.info("Starting BC fallback pretrain for %s steps (show_progress enabled).", bc_steps)
+        bc.fit(dset, n_steps=bc_steps, save_interval=int(1e9), show_progress=True)
         bc.save_model(str(out / "iql_policy.d3"))
         logger.info("BC pretrain saved; continuing.")
     norm.save(out / "pretrain_normalizer.pkl")

@@ -9,7 +9,7 @@ from src.utils.io_utils import load_yaml, save_csv, save_json
 from src.utils.logging_utils import get_logger
 from src.utils.device import get_torch_device, log_device, set_num_threads, resolve_compile_flag
 from src.features.engineering import build_features
-from src.features.normalizer import RollingZScore
+from src.features.normalizer import load_normalizer
 from src.envs.market_env import MarketEnv
 from src.evaluation.metrics import summarize
 from src.evaluation.plots import candlestick_html, equity_html
@@ -91,7 +91,7 @@ def run():
     norm_path = Path("evaluation/artifacts/finetune_normalizer.pkl")
     if not norm_path.exists():
         raise FileNotFoundError("Missing finetune_normalizer.pkl. Run SAC fine-tune before evaluation.")
-    norm_ft = RollingZScore.load(norm_path)
+    norm_ft = load_normalizer(norm_path)
     feats_ctx_n = norm_ft.transform(feats_ctx)
 
     env = MarketEnv(df_test_ctx[["open", "high", "low", "close"]], feats_ctx_n, env_cfg)

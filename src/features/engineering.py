@@ -16,7 +16,10 @@ def _atr(h, l, c, w=14):
     return tr.rolling(w, min_periods=w).mean()
 
 def _parkinson(h,l,w=20):
-    rs = (np.log(h/l))**2
+    # Guard against h < l (data errors) and ensure valid log ratios
+    h_safe = h.clip(lower=l)  # Ensure h >= l
+    ratio = (h_safe / l).clip(lower=1.0)  # Ensure ratio >= 1.0
+    rs = (np.log(ratio))**2
     return ((rs.rolling(w, min_periods=w).mean()) / (4*np.log(2))).pow(0.5)
 
 def _donchian_pos(c,w=20):
@@ -46,8 +49,8 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     X["ewma_vol_20"] = X["ret_1"].ewm(span=20, adjust=False).std()
     # trend/momentum
     X["rsi_6"], X["rsi_14"], X["rsi_21"] = _rsi(c,6), _rsi(c,14), _rsi(c,21)
-    X["macd_12_26"] = _ema(c,12) - _ema(c,26)
-    for w in (24,48,96): X[f"ma_slope_{w}"] = _sma(c,w).diff()/(c.shift(1).abs()+1e-12)
+    X["macd_12_26"] = (_ema(c,12) - _ema(c,26)) / c  # Normalized by price (percentage MACD)
+    for w in (24,48,96): X[f"ma_slope_{w}"] = _sma(c,w).diff()/(c.shift(1).abs()+1e-12) * 10000  # Scaled to basis points
     X["pct_above_ma96"] = c/_sma(c,96) - 1.0
     # range/vol
     X["atr_14"] = _atr(h,l,c,14); X["parkinson_20"] = _parkinson(h,l,20)
@@ -56,7 +59,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     # volume
     if "volume" in df.columns:
         vol = pd.to_numeric(df["volume"], errors="coerce")
-        X["vol_z"] = (vol - vol.rolling(96, min_periods=20).mean()) / (vol.rolling(96, min_periods=20).std() + 1e-12)
+        X["vol_z"] = (vol - vol.rolling(96, min_periods=96).mean()) / (vol.rolling(96, min_periods=96).std() + 1e-12)
         X["vol_chg"] = vol.pct_change()
         if "taker_buy_volume" in df.columns:
             tb = pd.to_numeric(df["taker_buy_volume"], errors="coerce")
