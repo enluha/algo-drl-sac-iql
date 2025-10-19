@@ -102,7 +102,10 @@ def main():
     )
     agent = IQL(config=config_iql, device=device.type, enable_ddp=False)
     out = Path("evaluation/artifacts"); out.mkdir(parents=True, exist_ok=True)
-    steps = int(os.getenv("QA_STEPS", algo_cfg["grad_steps"]))
+    
+    # Use grad_steps_IQL from config, or QA_STEPS override if set (for quick testing)
+    default_steps = int(algo_cfg.get("grad_steps_IQL", algo_cfg.get("grad_steps", 1000)))
+    steps = int(os.getenv("QA_STEPS")) if os.getenv("QA_STEPS") else default_steps
     logger.info("Starting IQL offline pretrain for %s gradient steps (show_progress enabled).", steps)
     try:
         agent.fit(dset, n_steps=steps, save_interval=int(1e9), show_progress=True)
@@ -124,7 +127,8 @@ def main():
             compile_graph=compile_graph,
         )
         bc = BC(config=bc_cfg, device=device.type, enable_ddp=False)
-        bc_steps = int(os.getenv("QA_STEPS", 300000))
+        # Use QA_STEPS if set, otherwise use 300000 for BC fallback
+        bc_steps = int(os.getenv("QA_STEPS")) if os.getenv("QA_STEPS") else 300000
         logger.info("Starting BC fallback pretrain for %s steps (show_progress enabled).", bc_steps)
         bc.fit(dset, n_steps=bc_steps, save_interval=int(1e9), show_progress=True)
         bc.save_model(str(out / "iql_policy.d3"))

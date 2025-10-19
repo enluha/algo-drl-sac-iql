@@ -6,6 +6,7 @@ alpha_learning_rate: 0.0003
 initial_temperature: 0.1
 target_entropy: -1.0
 batch_size: 256
+grad_steps_SAC: 100000  # Number of environment steps for SAC fine-tuning
 buffer_size: 10000 # Increase it once algo stability is confirmed e.g. 200000
 updates_per_step: 4
 actor_optim_factory:

@@ -143,7 +143,9 @@ def main():
 
     env.reset()
 
-    steps = int(os.getenv("QA_STEPS", 100000))  # Increased from 33333 for better convergence
+    # Use grad_steps_SAC from config, or QA_STEPS override if set (for quick testing)
+    default_steps = int(algo_cfg.get("grad_steps_SAC", 100000))
+    steps = int(os.getenv("QA_STEPS")) if os.getenv("QA_STEPS") else default_steps
     buffer_limit = int(algo_cfg.get("buffer_size", 200000))
     cache_size = min(buffer_limit, max(len(df_ft), 10000))
     replay_buffer = ReplayBuffer(
