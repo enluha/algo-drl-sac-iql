@@ -68,4 +68,11 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     X = X.join(_cyc(df.index))
     X = X.replace([np.inf, -np.inf], np.nan).fillna(0.0)
     X = X.clip(lower=-1e6, upper=1e6)
+    
+    # Apply smoothing to reduce noise (EMA with span=3)
+    # This helps prevent the model from overreacting to every tick
+    smoothing_cols = [col for col in X.columns if col.startswith(('ret_', 'rsi_', 'macd_', 'vol_'))]
+    for col in smoothing_cols:
+        X[col] = X[col].ewm(span=3, adjust=False).mean()
+    
     return X.astype("float32")

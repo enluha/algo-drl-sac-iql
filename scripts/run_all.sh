@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
+echo "DI GUD ONE"
 # --- knobs / overrides ---
 SYMBOL="${SYMBOL:-BTCUSDT}"
 INTERVAL_SEC="${INTERVAL_SEC:-3600}"
@@ -72,6 +72,11 @@ if sed --version >/dev/null 2>&1; then
 else
   sed -i '' "s#^csv_path:.*#csv_path: \"$CSV_PATH\"#g" config/data.yaml
 fi
+
+# --- 2.5) generate feature overview visualization ---
+echo "=== Generating feature_overview.html ==="
+"$PYTHON_BIN" scripts/plot_feature_overview.py
+echo "Feature overview saved to data/feature_overview.html"
 
 # --- 3) offline pretrain (IQL) ---
 echo "=== Offline pretrain (IQL) ==="

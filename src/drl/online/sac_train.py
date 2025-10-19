@@ -143,7 +143,7 @@ def main():
 
     env.reset()
 
-    steps = int(os.getenv("QA_STEPS", 33333))
+    steps = int(os.getenv("QA_STEPS", 100000))  # Increased from 33333 for better convergence
     buffer_limit = int(algo_cfg.get("buffer_size", 200000))
     cache_size = min(buffer_limit, max(len(df_ft), 10000))
     replay_buffer = ReplayBuffer(

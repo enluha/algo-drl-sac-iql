@@ -20,6 +20,7 @@ class MarketEnv(gym.Env):
         rw = cfg.get("reward", {})
         self.kappa_cost = float(rw.get("kappa_cost", 0.0))
         self.lambda_risk = float(rw.get("lambda_risk", 0.0))
+        self.kappa_turnover = float(rw.get("kappa_turnover", 0.0))  # Direct turnover penalty
         self.risk_metric = str(rw.get("risk_metric", "drawdown")).lower()
 
         self.t = 0
@@ -78,7 +79,7 @@ class MarketEnv(gym.Env):
         else:
             risk_pen = new_dd
 
-        reward = raw - self.kappa_cost * cost - self.lambda_risk * risk_pen
+        reward = raw - self.kappa_cost * cost - self.lambda_risk * risk_pen - self.kappa_turnover * turn
 
         if not np.isfinite([raw, cost, reward, eq_next]).all():
             raw = cost = reward = 0.0
