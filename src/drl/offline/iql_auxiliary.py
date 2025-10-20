@@ -103,20 +103,28 @@ class IQLWithAuxiliary(IQL):
         else:
             print("Warning: Dataset has no auxiliary labels. Auxiliary task disabled.")
         
-        # Call parent fit
-        return super().fit(
-            dataset=dataset,
-            n_steps=n_steps,
-            n_steps_per_epoch=n_steps_per_epoch,
-            experiment_name=experiment_name,
-            with_timestamp=with_timestamp,
-            logger_adapter=logger_adapter,
-            show_progress=show_progress,
-            save_interval=save_interval,
-            evaluators=evaluators,
-            callback=callback,
-            epoch_callback=epoch_callback,
-        )
+        # Call parent fit - don't pass logger_adapter at all if it's None
+        # This lets d3rlpy use its default logger creation
+        fit_kwargs = {
+            'dataset': dataset,
+            'n_steps': n_steps,
+            'n_steps_per_epoch': n_steps_per_epoch,
+            'experiment_name': experiment_name,
+            'with_timestamp': with_timestamp,
+            'show_progress': show_progress,
+            'save_interval': save_interval,
+        }
+        
+        if evaluators is not None:
+            fit_kwargs['evaluators'] = evaluators
+        if callback is not None:
+            fit_kwargs['callback'] = callback
+        if epoch_callback is not None:
+            fit_kwargs['epoch_callback'] = epoch_callback
+        if logger_adapter is not None:
+            fit_kwargs['logger_adapter'] = logger_adapter
+        
+        return super().fit(**fit_kwargs)
 
 
 def create_iql_with_auxiliary(

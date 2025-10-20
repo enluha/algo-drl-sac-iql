@@ -24,7 +24,7 @@ def save_csv(df, path: str | Path) -> None:
 
 def atomic_write_text(path: str | Path, text: str) -> None:
     p = Path(path); p.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", delete=False) as tmp:
+    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
         tmp.write(text)
         tmp_path = Path(tmp.name)
     shutil.move(str(tmp_path), str(p))

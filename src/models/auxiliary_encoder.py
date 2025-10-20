@@ -137,7 +137,7 @@ class AuxiliaryEncoderFactory(EncoderFactory):
         self._dropout_rate = dropout_rate
     
     def create(self, observation_shape: Sequence[int]) -> AuxiliaryPredictionEncoder:
-        """Create encoder instance."""
+        """Create encoder instance for actor/value networks."""
         activation_fn = {
             "relu": nn.ReLU,
             "tanh": nn.Tanh,
@@ -149,6 +149,29 @@ class AuxiliaryEncoderFactory(EncoderFactory):
             feature_size=self._feature_size,
             hidden_units=self._hidden_units,
             activation=activation_fn,
+            use_batch_norm=self._use_batch_norm,
+            dropout_rate=self._dropout_rate,
+        )
+    
+    def create_with_action(
+        self,
+        observation_shape: Sequence[int],
+        action_size: int,
+        discrete_action: bool = False,
+    ) -> Encoder:
+        """
+        Create encoder for critic networks (observation + action).
+        
+        For critics, we DON'T use auxiliary task - just standard vector encoder.
+        The auxiliary task only helps the actor learn better representations.
+        """
+        from d3rlpy.models.encoders import VectorEncoderWithAction
+        
+        # Use standard encoder for critic (no auxiliary head needed)
+        return VectorEncoderWithAction(
+            observation_shape=observation_shape,
+            action_size=action_size,
+            hidden_units=self._hidden_units,
             use_batch_norm=self._use_batch_norm,
             dropout_rate=self._dropout_rate,
         )

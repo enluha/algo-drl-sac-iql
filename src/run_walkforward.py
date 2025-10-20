@@ -201,10 +201,6 @@ def run():
 
     candlestick_html(df_test_ctx.loc[plot_start:plot_end][["open", "high", "low", "close"]], signals_df, ch / f"candlestick_{symbol}_SepOct2025.html")
     equity_html(equity_df["equity"], {buy_hold.name: buy_hold}, ch / f"equity_{symbol}.html")
-    if not equity_rebased.empty:
-        equity_html(equity_rebased, {buy_hold_rebased.name: buy_hold_rebased}, ch / "8.html")
-    else:
-        equity_html(equity_df["equity"], {buy_hold.name: buy_hold}, ch / "8.html")
 
     # Summarize; metrics now prefer PnL internally if present and include trade stats
     turn_thresh = None
@@ -226,7 +222,6 @@ def run():
         },
     }
     build_text_report(summary, rep / f"summary_report_{symbol}.txt", context=context)
-    build_text_report(summary, rep / "summary_report.txt", context=context)
     save_json({"records": len(ledger_df), "test_start": str(splits.test.start), "test_end": str(splits.test.end)}, rep / f"walkforward_meta_{symbol}.json")
 
 
