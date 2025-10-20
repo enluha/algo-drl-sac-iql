@@ -24,7 +24,7 @@ def test_equity_starts_at_one_and_costs_full():
 
     action = np.array([1.0], dtype=np.float32)
     _, reward, *_ = env.step(action)
-    turnover = abs(np.tanh(action[0]) - 0.0)
+    turnover = abs(action[0] - 0.0)
     cost = (cfg["costs"]["slippage_bps"] + cfg["costs"]["commission_bps"]) / 1e4 * turnover
     expected_equity = 1.0 - cost
     assert abs(env.equity - expected_equity) < 1e-6

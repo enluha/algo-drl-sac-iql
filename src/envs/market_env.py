@@ -13,8 +13,10 @@ class MarketEnv(gym.Env):
         self.W = int(cfg["window_bars"])
         self.deadband = float(cfg["deadband"])
         self.min_step = float(cfg["min_step"])
+        self.grid_step = float(cfg.get("grid_step", 0.0))  # optional position quantization
         self.latency = int(cfg.get("latency_bars", 1))
         self.leverage = float(cfg.get("leverage_max", 1.0))
+        self.max_step = float(cfg.get("max_step", 1.0))  # max position change per bar
         costs = cfg.get("costs", {})
         self.bps = (float(costs.get("slippage_bps", 0)) + float(costs.get("commission_bps", 0))) / 1e4
         rw = cfg.get("reward", {})
@@ -54,11 +56,18 @@ class MarketEnv(gym.Env):
         return obs, {}
 
     def step(self, action: np.ndarray):
-        # desired position for the NEXT bar
-        a = float(np.tanh(action[0]))
+        # desired position for the NEXT bar (action expected in [-1, 1])
+        a = float(action[0])
         if abs(a) < self.deadband: a = 0.0
+        # optional position grid to reduce micro-adjustments
+        if self.grid_step > 0:
+            a = float(np.round(a / self.grid_step) * self.grid_step)
         # enforce min_step on change
         if abs(a - self._w_prev) < self.min_step: a = self._w_prev
+        # limit per-bar position change (rate limiter)
+        diff = a - self._w_prev
+        if abs(diff) > self.max_step:
+            a = float(self._w_prev + np.sign(diff) * self.max_step)
         a = float(np.clip(a, -self.leverage, +self.leverage))
 
         ret_t = float(np.log(self.prices["close"].iloc[self.t] / self.prices["close"].iloc[self.t-1]))

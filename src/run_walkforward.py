@@ -159,10 +159,18 @@ def run():
         raise RuntimeError("No trades captured during evaluation window.")
 
     ledger_df = pd.DataFrame(ledger_records).set_index("timestamp").sort_index()
+    # Compute actual PnL return used for equity (aligns with env equity update)
+    # Keep penalized reward in 'net' for diagnostics, but evaluate on PnL.
+    if "raw" in ledger_df.columns and "cost" in ledger_df.columns:
+        ledger_df["pnl"] = ledger_df["raw"].fillna(0.0) - ledger_df["cost"].fillna(0.0)
     signals_df = pd.Series(signals_map, name="weight").sort_index()
     predictions_df = pd.Series(preds_map, name="prediction").sort_index().to_frame()
 
-    equity = (1.0 + ledger_df["net"].fillna(0.0)).cumprod().rename("equity")
+    # Equity based on actual PnL (raw - cost). If 'pnl' missing, fall back to 'net'.
+    if "pnl" in ledger_df.columns:
+        equity = (1.0 + ledger_df["pnl"].fillna(0.0)).cumprod().rename("equity")
+    else:
+        equity = (1.0 + ledger_df["net"].fillna(0.0)).cumprod().rename("equity")
     price = df_test_ctx["close"].reindex(equity.index).ffill()
     buy_hold = (price / price.iloc[0]).rename(f"buy_and_hold_{data_cfg['symbol']}")
     equity_df = equity.to_frame().join(buy_hold, how="left")
@@ -198,7 +206,13 @@ def run():
     else:
         equity_html(equity_df["equity"], {buy_hold.name: buy_hold}, ch / "8.html")
 
-    summary = summarize(ledger_df, equity_df["equity"])
+    # Summarize; metrics now prefer PnL internally if present and include trade stats
+    turn_thresh = None
+    try:
+        turn_thresh = float(env_cfg.get("min_step", None))
+    except Exception:
+        turn_thresh = None
+    summary = summarize(ledger_df, equity_df["equity"], turn_thresh=turn_thresh)
     summary["equity_end_total"] = float(equity.iloc[-1]) if not equity.empty else float("nan")
     summary["window_return_rebased"] = float(equity_rebased.iloc[-1]) if not equity_rebased.empty else float("nan")
 

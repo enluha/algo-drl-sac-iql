@@ -20,6 +20,7 @@ def build_offline_dataset(prices: pd.DataFrame, feats: pd.DataFrame, cfg: dict) 
     w_prev, eq, peak = 0.0, 1.0, 1.0
     bps = (cfg["costs"]["slippage_bps"] + cfg["costs"]["commission_bps"]) / 1e4
     kappa = cfg["reward"]["kappa_cost"]; lam = cfg["reward"]["lambda_risk"]
+    kturn = float(cfg.get("reward", {}).get("kappa_turnover", 0.0))
 
     for t in range(W+1, len(prices)):
         window = np.concatenate(
@@ -41,10 +42,11 @@ def build_offline_dataset(prices: pd.DataFrame, feats: pd.DataFrame, cfg: dict) 
 
         ret = float(np.log(prices["close"].iloc[t] / prices["close"].iloc[t-1]))
         raw = w_prev * ret
-        cost = bps * abs(a - w_prev)
+        turn = abs(a - w_prev)
+        cost = bps * turn
         eq = eq * (1 + raw - cost)
         peak = max(peak, eq); ddplus = max(0.0, (peak-eq)/peak)
-        r = raw - kappa*cost - lam*ddplus
+        r = raw - kappa*cost - lam*ddplus - kturn*turn
         if not np.isfinite(r):
             continue
 

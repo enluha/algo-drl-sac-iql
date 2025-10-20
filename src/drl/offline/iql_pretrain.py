@@ -68,6 +68,16 @@ def main():
         raise RuntimeError(f"Non-finite features after normalization: {bad} cells")
     assert df_pre.index.max() <= pre.end, "Pretrain slice exceeded pretrain end."
 
+    # Auto-generate feature overview visualization (after features are ready)
+    try:
+        from scripts.plot_feature_overview import generate_feature_overview
+        output_html = Path("data/feature_overview.html")
+        csv_path = Path(data_cfg["csv_path"])
+        generate_feature_overview(output_html, csv_path)
+        logger.info(f"Feature overview saved to {output_html}")
+    except Exception as e:
+        logger.warning(f"Failed to generate feature_overview.html: {e}")
+
     dset = build_offline_dataset(df_pre[["open","high","low","close"]], feats_n, env_cfg)
     encoder_cfg = algo_cfg.get("encoder", {})
     fallback_hidden = encoder_cfg.get(
