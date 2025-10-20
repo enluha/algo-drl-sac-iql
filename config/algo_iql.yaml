@@ -5,6 +5,12 @@ lr: 0.0003
 batch_size: 256
 grad_steps_IQL: 100000  # fast IQL pretrain: 5000; intensive training: 100000
 compile_graph: true
+
+# Auxiliary task settings
+use_auxiliary_task: true  # Enable price direction prediction
+aux_future_bars: 24  # Predict 24 hours ahead
+aux_loss_weight: 0.1  # Weight for auxiliary loss (0.1 = 10% of total loss)
+
 actor_encoder_factory:
   type: vector
   params: { hidden_units: [256, 256] }

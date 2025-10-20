@@ -12,11 +12,12 @@ def build_offline_dataset(prices: pd.DataFrame, feats: pd.DataFrame, cfg: dict) 
     target_vol = 0.02
     base_size = (target_vol / (sigma + 1e-6)).clip(0.0, 1.0)
 
-    ma96 = prices["close"].rolling(96, min_periods=96).mean()
-    allow_long = (prices["close"] > ma96).fillna(False)
-    allow_short = (prices["close"] < ma96).fillna(False)
+    # --- future return labels for auxiliary task (look-ahead for supervised learning) ---
+    future_horizon = int(cfg.get("aux_future_bars", 24))  # Default: 24 hours ahead
+    future_returns = np.log(prices["close"].shift(-future_horizon) / prices["close"])
+    future_labels = np.sign(future_returns).fillna(0.0).astype(np.float32)  # -1, 0, +1
 
-    obs, act, rew, done = [], [], [], []
+    obs, act, rew, done, aux_labels = [], [], [], [], []
     w_prev, eq, peak = 0.0, 1.0, 1.0
     bps = (cfg["costs"]["slippage_bps"] + cfg["costs"]["commission_bps"]) / 1e4
     kappa = cfg["reward"]["kappa_cost"]; lam = cfg["reward"]["lambda_risk"]
@@ -31,14 +32,21 @@ def build_offline_dataset(prices: pd.DataFrame, feats: pd.DataFrame, cfg: dict) 
         if not np.isfinite(window).all():
             continue
 
+        # Expert policy: Simple momentum (diversified dataset, no regime filter)
         mom24 = (prices["close"].iloc[t] / prices["close"].iloc[t-24] - 1.0) if t >= 24 else 0.0
         sz = float(base_size.iloc[t]) if not np.isnan(base_size.iloc[t]) else 0.0
-        a = 0.0
-        if mom24 > 0 and allow_long.iloc[t]:
+        
+        # Momentum with threshold - agent must learn regime detection itself
+        if mom24 > 0.02:  # Upward momentum
             a = +0.5 * sz
-        elif mom24 < 0 and allow_short.iloc[t]:
+        elif mom24 < -0.02:  # Downward momentum
             a = -0.5 * sz
+        else:
+            a = 0.0  # Neutral
         a = float(np.clip(a, -1.0, 1.0))
+        
+        # Future label for auxiliary task
+        aux_label = float(future_labels.iloc[t])
 
         ret = float(np.log(prices["close"].iloc[t] / prices["close"].iloc[t-1]))
         raw = w_prev * ret
@@ -54,15 +62,21 @@ def build_offline_dataset(prices: pd.DataFrame, feats: pd.DataFrame, cfg: dict) 
         act.append([np.float32(a)])
         rew.append(np.float32(r))
         done.append(False)
+        aux_labels.append(np.float32(aux_label))
         w_prev = a
 
     if len(obs) == 0:
         raise RuntimeError("Offline dataset empty after filtering; check features/normalizer.")
 
     done[-1] = True
-    return MDPDataset(
+    dataset = MDPDataset(
         observations=np.stack(obs, 0).astype(np.float32),
         actions=np.array(act, dtype=np.float32),
         rewards=np.array(rew, dtype=np.float32),
         terminals=np.array(done, dtype=np.bool_)
     )
+    
+    # Attach auxiliary labels as metadata (d3rlpy will ignore, but we can use in custom training)
+    dataset._aux_labels = np.array(aux_labels, dtype=np.float32)
+    
+    return dataset
