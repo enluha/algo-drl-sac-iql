@@ -1,0 +1,33 @@
+# OPT STM Generator - Python Dependencies
+# ==========================================
+# Generated: October 21, 2025
+#
+# Core numerical and scientific computing
+numpy>=1.24.0
+
+# Data manipulation and analysis
+pandas>=2.0.0
+
+# Excel file handling
+openpyxl>=3.1.0
+
+# Scientific computing and spatial algorithms
+scipy>=1.10.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Future UI dependencies (to be installed when needed)
+# PyQt5>=5.15.0  # Uncomment when implementing GUI
+# PyQt5-Qt5>=5.15.0
+# PyQt5-sip>=12.11.0
+
+# Future database dependencies (to be installed when needed)
+# sqlite3 is part of Python standard library - no installation needed
+
+# Development and testing (optional)
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+# black>=23.0.0
+# flake8>=6.0.0
+# mypy>=1.0.0
