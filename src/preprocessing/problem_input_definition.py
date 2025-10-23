@@ -1157,6 +1157,9 @@ class GeometryProcessor:
         
         print(f"  Generated {len(nodes)} nodes and {len(elements)} elements")
         
+        # Verify no coincident nodes exist
+        self._verify_no_coincident_nodes()
+        
         # Generate surface elements dictionary for faster boundary condition application
         print(f"  Computing surface elements...")
         self._compute_surface_elements()
@@ -1193,6 +1196,10 @@ class GeometryProcessor:
         self.surface_elements = np.array(surface_elements)
         self.surface_element_centers = np.array(surface_element_centers) if surface_element_centers else np.array([]).reshape(0, 3)
         
+        # Store unique boundary nodes for visualization (avoiding duplicates)
+        self.surface_nodes = np.array(sorted(list(boundary_nodes)))  # Sorted for consistency
+        print(f"  Surface nodes identified: {len(self.surface_nodes)} unique nodes on boundary")
+        
         # Compute outward normals for surface elements (for force visualization)
         self._compute_surface_normals()
         
@@ -1201,6 +1208,10 @@ class GeometryProcessor:
         # Diagnostic: Count surface elements per face (for debugging face coverage)
         if len(surface_elements) > 0 and hasattr(self, 'positive_faces'):
             self._diagnose_face_coverage()
+            
+            # DIAGNOSTIC: Plot Face_ID=4 surface nodes for inspection
+            # Uncomment the line below to enable the diagnostic plot
+            self._plot_face_4_diagnostic()
     
     def _get_boundary_nodes(self) -> Set[int]:
         """
@@ -1226,6 +1237,57 @@ class GeometryProcessor:
                          if count < max_connections}
         
         return boundary_nodes
+    
+    def _verify_no_coincident_nodes(self):
+        """
+        Verify that no coincident nodes exist within a tolerance.
+        
+        Tolerance: 5% of the minimum voxel dimension.
+        Uses spatial indexing for efficient O(N log N) performance.
+        """
+        if self.nodes is None or len(self.nodes) == 0:
+            return
+        
+        # Calculate tolerance (5% of minimum voxel size)
+        tolerance = 0.05 * min(
+            self.config.brick_size_x, 
+            self.config.brick_size_y, 
+            self.config.brick_size_z
+        )
+        
+        print(f"  Verifying no coincident nodes (tolerance = {tolerance:.4f} mm)...")
+        
+        # Use KDTree for efficient spatial queries
+        from scipy.spatial import cKDTree
+        tree = cKDTree(self.nodes)
+        
+        # Query for all pairs within tolerance
+        # query_pairs returns set of (i,j) pairs where i < j
+        pairs = tree.query_pairs(r=tolerance)
+        
+        if len(pairs) > 0:
+            # Found coincident nodes - this is a problem!
+            print(f"  WARNING: Found {len(pairs)} pairs of coincident nodes within {tolerance:.4f} mm:")
+            
+            # Show first few examples
+            for i, (idx1, idx2) in enumerate(list(pairs)[:5]):
+                coord1 = self.nodes[idx1]
+                coord2 = self.nodes[idx2]
+                dist = np.linalg.norm(coord1 - coord2)
+                print(f"    Pair {i+1}: Nodes {idx1} and {idx2}")
+                print(f"      Node {idx1}: ({coord1[0]:.4f}, {coord1[1]:.4f}, {coord1[2]:.4f})")
+                print(f"      Node {idx2}: ({coord2[0]:.4f}, {coord2[1]:.4f}, {coord2[2]:.4f})")
+                print(f"      Distance: {dist:.6f} mm")
+            
+            if len(pairs) > 5:
+                print(f"    ... and {len(pairs) - 5} more pairs")
+        else:
+            # No coincident nodes - this is expected!
+            # Calculate minimum distance for reporting
+            distances, _ = tree.query(self.nodes, k=2)  # k=2 because closest is self
+            min_distance = np.min(distances[:, 1])  # distances[:,1] are nearest neighbor distances
+            
+            print(f"  ✓ No coincident nodes found (minimum distance between nodes: {min_distance:.4f} mm)")
     
     def _compute_surface_normals(self):
         """
@@ -1370,6 +1432,48 @@ class GeometryProcessor:
                 print(f"    ⚠ WARNING: Some elements too far inward (possible extra layer)")
             else:
                 print(f"    ✓ All Face_ID 4 voxels positioned correctly (centers offset by ~half voxel)")
+    
+    def _plot_face_4_diagnostic(self):
+        """Call external diagnostic script to visualize Face_ID=4 surface nodes."""
+        try:
+            # Import using importlib to handle dynamic path
+            import importlib.util
+            from pathlib import Path
+            
+            # Get the diagnostic script path
+            # This file is in: src/preprocessing/problem_input_definition.py
+            # We need: tests/plot_face_surface_nodes.py
+            current_file = Path(__file__).resolve()
+            project_root = current_file.parent.parent.parent  # Go up 3 levels
+            diagnostic_script = project_root / 'tests' / 'plot_face_surface_nodes.py'
+            
+            # Load the module dynamically
+            spec = importlib.util.spec_from_file_location("plot_face_surface_nodes", diagnostic_script)
+            diagnostic_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(diagnostic_module)
+            
+            plot_face_surface_nodes = diagnostic_module.plot_face_surface_nodes
+            
+            # Find Face_ID=4 from Volume_ID=1
+            face_4 = None
+            for face in self.positive_faces:
+                if face.face_id == 4 and face.volume_id == 1:
+                    face_4 = face
+                    break
+            
+            if face_4 is not None:
+                plot_face_surface_nodes(
+                    nodes=self.nodes,
+                    surface_nodes=self.surface_nodes,
+                    face_points=face_4.points,
+                    face_id=4,
+                    volume_id=1
+                )
+            else:
+                print("  Note: Face_ID=4 from Volume_ID=1 not found, skipping diagnostic plot")
+                
+        except Exception as e:
+            print(f"  Note: Could not generate Face_ID=4 diagnostic plot: {e}")
 
 
 class BoundaryConditionProcessor:
@@ -1683,12 +1787,11 @@ class ModelVisualizer:
         fig.canvas.mpl_connect('scroll_event', constrained_zoom)
         
         # Plot geometry voxels
-        # NOTE: What the plotted dots represent:
-        # - Grey dots (surface elements): Centers of surface voxels (1 per Hex8 element)
-        #   Each Hex8 voxel has 8 corner nodes; plotted dots are geometric centroids
-        # - Red dots (supports): Actual node locations on support surfaces (can be 1-8 per voxel)
-        # - Green dots (loads): Centers of voxels containing load nodes (1 per affected voxel)
-        #   Load voxels use larger markers (s=60 vs s=15) for high visibility
+        # NOTE: What the plotted elements represent:
+        # - Grey/blue dots (surface nodes): ACTUAL boundary nodes on the surface (unique, deduplicated)
+        #   These are the corner points of surface voxels, NOT element centers
+        # - Red dots (supports): Support node locations on boundary
+        # - Green dot (load): Center of THE SINGLE voxel closest to the load application point
         self._plot_voxels(ax)
         
         # Highlight supported and loaded nodes
@@ -1713,43 +1816,21 @@ class ModelVisualizer:
             plt.close()
     
     def _plot_voxels(self, ax):
-        """Plot geometry voxels - optimized to show only surface elements."""
+        """Plot actual surface boundary nodes (not element centers)."""
         if self.geometry.elements is None or self.geometry.nodes is None:
             return
         
-        # Use surface elements if available for much faster rendering
-        if hasattr(self.geometry, 'surface_elements') and len(self.geometry.surface_elements) > 0:
-            print(f"  Plotting {len(self.geometry.surface_elements)} surface elements (optimized)...")
+        # Plot actual surface nodes (unique, deduplicated boundary nodes)
+        if hasattr(self.geometry, 'surface_nodes') and len(self.geometry.surface_nodes) > 0:
+            print(f"  Plotting {len(self.geometry.surface_nodes)} unique surface nodes...")
             
-            # Plot surface element centers with reduced opacity so forces can be seen
-            surface_centers = self.geometry.surface_element_centers
-            ax.scatter(surface_centers[:, 0], surface_centers[:, 1], surface_centers[:, 2],
-                      c='lightblue', alpha=0.3, s=15, label='Surface Elements', edgecolors='steelblue',
-                      depthshade=True)  # Allow forces to show through
+            # Get coordinates of surface nodes
+            surface_node_coords = self.geometry.nodes[self.geometry.surface_nodes]
             
-            # For better visualization, also draw wireframe of surface elements
-            # NOTE: Removed element count cap to ensure all surface elements are visualized
-            max_wireframe = min(len(self.geometry.surface_elements), 2000)  # Limit for performance
-            if len(self.geometry.surface_elements) > max_wireframe:
-                print(f"  Note: Plotting wireframe for first {max_wireframe} of {len(self.geometry.surface_elements)} surface elements")
-            
-            for surf_elem_idx in self.geometry.surface_elements[:max_wireframe]:
-                element_nodes = self.geometry.elements[surf_elem_idx]
-                element_coords = self.geometry.nodes[element_nodes]
-                
-                # Draw edges of hexahedron (12 edges)
-                edges = [
-                    [0,1], [1,2], [2,3], [3,0],  # bottom face
-                    [4,5], [5,6], [6,7], [7,4],  # top face  
-                    [0,4], [1,5], [2,6], [3,7]   # vertical edges
-                ]
-                
-                for edge in edges:
-                    start, end = edge
-                    ax.plot3D([element_coords[start,0], element_coords[end,0]],
-                             [element_coords[start,1], element_coords[end,1]],
-                             [element_coords[start,2], element_coords[end,2]], 
-                             'b-', alpha=0.1, linewidth=0.5)
+            # Plot as simple dots (no duplicates, nodes are already deduplicated)
+            ax.scatter(surface_node_coords[:, 0], surface_node_coords[:, 1], surface_node_coords[:, 2],
+                      c='lightblue', alpha=0.4, s=20, label='Surface Nodes', 
+                      edgecolors='steelblue', linewidths=0.5, depthshade=True)
         else:
             # Fallback to original method if surface elements not computed
             if self.geometry.voxel_grid is None:
@@ -1765,7 +1846,7 @@ class ModelVisualizer:
             active_indices = np.argwhere(self.geometry.voxel_grid)
             
             # For large models, plot subset
-            max_voxels_to_plot = 2000  # Reduced for better performance
+            max_voxels_to_plot = 2000
             if len(active_indices) > max_voxels_to_plot:
                 print(f"  Large model detected ({len(active_indices)} voxels). Plotting sample...")
                 sample_idx = np.random.choice(len(active_indices), max_voxels_to_plot, replace=False)
@@ -1805,16 +1886,30 @@ class ModelVisualizer:
         if not self.bc_processor.loads or self.geometry.nodes is None:
             return
         
-        # Find elements containing load nodes and mark their centers in green
-        load_elements = set()
+        # For point loads, find ONLY the single closest element (not all elements sharing the node)
+        load_elements = []
         for load in self.bc_processor.loads:
-            for node_idx in load.affected_nodes:
-                # Find elements that contain this node
+            if load.affected_nodes:
+                # Get load point (centroid of affected nodes)
+                load_point = np.mean(self.geometry.nodes[load.affected_nodes], axis=0)
+                
+                # Find the single closest element to the load point
+                min_dist = float('inf')
+                closest_elem = None
+                
                 for elem_idx, element in enumerate(self.geometry.elements):
-                    if node_idx in element:
-                        load_elements.add(elem_idx)
+                    element_coords = self.geometry.nodes[element]
+                    elem_center = np.mean(element_coords, axis=0)
+                    dist = np.linalg.norm(elem_center - load_point)
+                    
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_elem = elem_idx
+                
+                if closest_elem is not None:
+                    load_elements.append(closest_elem)
         
-        # Plot load element centers in bright green (voxel centers, not nodes)
+        # Plot ONLY the single load element center in bright green (one voxel per load)
         if load_elements:
             load_element_centers = []
             for elem_idx in load_elements:
@@ -1825,7 +1920,7 @@ class ModelVisualizer:
             
             load_element_centers = np.array(load_element_centers)
             ax.scatter(load_element_centers[:, 0], load_element_centers[:, 1], load_element_centers[:, 2],
-                      c='limegreen', s=60, marker='o', label='Load Voxels', alpha=1.0, 
+                      c='limegreen', s=60, marker='o', label='Load Voxel', alpha=1.0, 
                       edgecolors='darkgreen', linewidths=2, zorder=10)
         
         # Plot force arrows with outward positioning using surface normals
@@ -2267,8 +2362,8 @@ def parse_face_definitions(df: pd.DataFrame, is_negative: bool = False) -> List[
     faces = []
     volume_type = "NEGATIVE" if is_negative else "POSITIVE"
     
-    # Skip header rows and get data
-    data_df = df.iloc[2:].copy()  # Skip first 2 rows (headers)
+    # Skip header rows and get data (only use first 8 columns to avoid extra Excel columns)
+    data_df = df.iloc[2:, :8].copy()  # Skip first 2 rows (headers), use first 8 columns
     data_df.columns = ['Volume_ID', 'Face_ID', 'Point_ID', 'X', 'Y', 'Z', 'Face_Type', 'Notes']
     
     # Remove completely empty rows
