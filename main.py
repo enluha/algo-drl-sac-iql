@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 OPT-STM Generator - Main Entry Point
-=====================================
+======================================
 
 This is the main executable for running the OPT-STM optimization pipeline.
 
